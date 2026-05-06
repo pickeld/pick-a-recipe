@@ -25,26 +25,30 @@
             <div class="form-row">
                 <div class="form-group">
                     <label for="openai_api_key">OpenAI API Key</label>
-                    <input type="password" id="openai_api_key" name="openai_api_key" 
-                           value="{{ config.openai_api_key }}" placeholder="sk-...">
+                <input type="password" id="openai_api_key" name="openai_api_key" 
+                       value="{{ config.openai_api_key }}" placeholder="sk-..."
+                       autocomplete="off" autocapitalize="none" spellcheck="false">
                 </div>
                 <div class="form-group">
                     <label for="openai_model">OpenAI Model</label>
-                    <input type="text" id="openai_model" name="openai_model" 
-                           value="{{ config.openai_model }}" placeholder="gpt-4">
+                <input type="text" id="openai_model" name="openai_model" 
+                       value="{{ config.openai_model }}" placeholder="gpt-4"
+                       autocomplete="off" autocapitalize="none" spellcheck="false">
                 </div>
             </div>
             
             <div class="form-row">
                 <div class="form-group">
                     <label for="gemini_api_key">Gemini API Key</label>
-                    <input type="password" id="gemini_api_key" name="gemini_api_key" 
-                           value="{{ config.gemini_api_key }}" placeholder="AIza...">
+                <input type="password" id="gemini_api_key" name="gemini_api_key" 
+                       value="{{ config.gemini_api_key }}" placeholder="AIza..."
+                       autocomplete="off" autocapitalize="none" spellcheck="false">
                 </div>
                 <div class="form-group">
                     <label for="gemini_model">Gemini Model</label>
-                    <input type="text" id="gemini_model" name="gemini_model" 
-                           value="{{ config.gemini_model }}" placeholder="gemini-2.0-flash">
+                <input type="text" id="gemini_model" name="gemini_model" 
+                       value="{{ config.gemini_model }}" placeholder="gemini-2.0-flash"
+                       autocomplete="off" autocapitalize="none" spellcheck="false">
                 </div>
             </div>
         </div>
@@ -91,12 +95,14 @@
                 <div class="form-group">
                     <label for="mealie_host">Mealie URL</label>
                     <input type="url" id="mealie_host" name="mealie_host" 
-                           value="{{ config.mealie_host }}" placeholder="http://localhost:9925">
+                           value="{{ config.mealie_host }}" placeholder="http://localhost:9925"
+                           autocomplete="off" autocapitalize="none" spellcheck="false">
                 </div>
                 <div class="form-group">
                     <label for="mealie_api_key">Mealie API Key</label>
                     <input type="password" id="mealie_api_key" name="mealie_api_key" 
-                           value="{{ config.mealie_api_key }}" placeholder="Your Mealie API key">
+                           value="{{ config.mealie_api_key }}" placeholder="Your Mealie API key"
+                           autocomplete="off" autocapitalize="none" spellcheck="false">
                 </div>
             </div>
         </div>
@@ -109,12 +115,14 @@
                 <div class="form-group">
                     <label for="tandoor_host">Tandoor URL</label>
                     <input type="url" id="tandoor_host" name="tandoor_host" 
-                           value="{{ config.tandoor_host }}" placeholder="https://tandoor.example.com">
+                           value="{{ config.tandoor_host }}" placeholder="https://tandoor.example.com"
+                           autocomplete="off" autocapitalize="none" spellcheck="false">
                 </div>
                 <div class="form-group">
                     <label for="tandoor_api_key">Tandoor API Key</label>
                     <input type="password" id="tandoor_api_key" name="tandoor_api_key" 
-                           value="{{ config.tandoor_api_key }}" placeholder="Your Tandoor API key">
+                           value="{{ config.tandoor_api_key }}" placeholder="Your Tandoor API key"
+                           autocomplete="off" autocapitalize="none" spellcheck="false">
                 </div>
             </div>
         </div>
