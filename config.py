@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "openai_api_key": "",
     "openai_model": "gpt-5-mini-2025-08-07",
     "gemini_api_key": "",
-    "gemini_model": "gemini-2.0-flash",
+    "gemini_model": "gemini-2.5-flash",
     "recipe_lang": "hebrew",
     "mealie_api_key": "",
     "mealie_host": "",

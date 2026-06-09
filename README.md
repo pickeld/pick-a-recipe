@@ -138,7 +138,7 @@ All configuration is managed through the web UI settings page (`/settings`). On 
 | **OpenAI API Key** | Your OpenAI API key (required if using OpenAI) |
 | **OpenAI Model** | Model to use (default: `gpt-5-mini-2025-08-07`) |
 | **Gemini API Key** | Your Google Gemini API key (required if using Gemini) |
-| **Gemini Model** | Model to use (default: `gemini-2.0-flash`) |
+| **Gemini Model** | Model to use (default: `gemini-2.5-flash`) |
 | **Recipe Language** | Target language for recipe output (e.g., `hebrew`, `english`) |
 | **Target Language Code** | ISO language code for transcription (e.g., `he`, `en`) |
 | **Whisper Model** | Whisper model size (`tiny`, `small`, `medium`, `large`) |

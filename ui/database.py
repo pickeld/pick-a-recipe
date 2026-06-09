@@ -122,6 +122,16 @@ def init_db():
             for key, value in DEFAULT_CONFIG.items():
                 set_config_value(key, value)
 
+        # Migrate retired Gemini model ids in existing databases.
+        # gemini-2.0-flash(-lite) were removed from the API and return 404,
+        # so rewrite them to the current default.
+        cursor.execute(
+            "UPDATE config SET value = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE key = 'gemini_model' AND value IN ('gemini-2.0-flash', 'gemini-2.0-flash-lite')",
+            (DEFAULT_CONFIG['gemini_model'],)
+        )
+        conn.commit()
+
 
 def hash_password(password: str) -> str:
     """Hash a password using SHA-256."""
