@@ -26,6 +26,12 @@ COPY . .
 # Expose the web UI port
 EXPOSE 5006
 
+# Container health probe: hits the unauthenticated /api/health endpoint which
+# verifies yt-dlp + the configured LLM. Marks the container unhealthy when the
+# top outage classes (model drift / yt-dlp drift) are present.
+HEALTHCHECK --interval=5m --timeout=20s --start-period=40s --retries=3 \
+    CMD curl -fsS http://localhost:5006/api/health || exit 1
+
 # Default environment variables
 ENV FLASK_DEBUG=false
 ENV PYTHONPATH=/app

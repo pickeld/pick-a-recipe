@@ -46,6 +46,33 @@ def get_db():
         conn.close()
 
 
+def set_config_value(key: str, value: str) -> bool:
+    """Persist a single config value to the SQLite store.
+
+    Lives here (rather than only in ui/database.py) so non-UI entrypoints - the
+    CLI and the LLM resilience layer - can write config without depending on the
+    ui package being importable. Creates the config table on demand.
+    """
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                INSERT INTO config (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP
+            ''', (key, str(value), str(value)))
+            conn.commit()
+            return True
+    except sqlite3.Error:
+        return False
+
+
 def _get_config_from_db() -> dict:
     """Load all configuration values from SQLite database."""
     config = DEFAULT_CONFIG.copy()

@@ -6,6 +6,7 @@ Uses Google's Gemini API with vision capabilities.
 from .base import LLMImageSelector
 from config import config
 from helpers import setup_logger
+from llm_resilience import call_with_model_fallback
 
 logger = setup_logger(__name__)
 
@@ -42,11 +43,14 @@ class GeminiImageSelector(LLMImageSelector):
         prompt = self._get_selection_prompt(len(frame_paths))
         parts.append(types.Part.from_text(text=prompt))
 
-        try:
-            response = client.models.generate_content(
-                model=config.GEMINI_MODEL,
+        def _call(model: str):
+            return client.models.generate_content(
+                model=model,
                 contents=[types.Content(role="user", parts=parts)],
             )
+
+        try:
+            response, _ = call_with_model_fallback("gemini", config.GEMINI_MODEL, _call)
             return self._parse_selection_response(response.text or "", len(frame_paths))
         except Exception as e:
             logger.error(f"Selection error: {e}")

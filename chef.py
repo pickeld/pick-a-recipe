@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from config import config
 from helpers import get_recipe_system_prompt, get_yield_nutrition_prompt, setup_logger
+from llm_resilience import call_with_model_fallback
 
 logger = setup_logger(__name__)
 
@@ -50,27 +51,43 @@ class Chef:
         logger.info(f"[AI Recipe] Chef initialized. Transcription length: {len(transcription)} chars")
 
     def _call_llm(self, system_prompt: str, user_content: str) -> str:
-        """Call the LLM and return the response text, abstracting provider differences."""
-        if self.provider == "openai":
+        """Call the LLM and return the response text, abstracting provider differences.
+
+        Wrapped with a model-fallback chain so a retired/deprecated model (404)
+        transparently fails over to a known-good model instead of taking the
+        whole extraction down (see PIC-34).
+        """
+        def _openai(model: str) -> str:
             resp = self.client.responses.create(
-                model=self.model,
+                model=model,
                 input=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
             )
             return resp.output_text
-        elif self.provider == "gemini":
+
+        def _gemini(model: str) -> str:
             resp = self.client.models.generate_content(
-                model=self.model,
+                model=model,
                 contents=f"{system_prompt}\n\n{user_content}"
             )
             raw_text = resp.text or ""
             logger.debug(f"Gemini raw response: {raw_text[:500]}...")
             # Extract JSON from markdown code blocks if present
             return _extract_json(raw_text)
+
+        if self.provider == "openai":
+            call = _openai
+        elif self.provider == "gemini":
+            call = _gemini
         else:
             raise ValueError(f"Unknown LLM provider: {self.provider}")
+
+        result, used_model = call_with_model_fallback(self.provider, self.model, call)
+        # Stick with the working model for the rest of this Chef's lifetime.
+        self.model = used_model
+        return result
 
     def _postprocess_recipe(self, data: dict, source_url: str | None) -> dict:
         data.setdefault("@context", "https://schema.org")

@@ -73,6 +73,26 @@ def _get_or_create_secret_key():
         pass  # If we can't write, still use the key for this session
     return new_key
 
+
+# Health endpoints (intentionally unauthenticated so container/orchestrator
+# health probes can reach them). /healthz is a cheap liveness ping; /api/health
+# runs the yt-dlp + LLM checks and returns 200 when healthy, 503 otherwise.
+@app.route('/healthz')
+def healthz():
+    return jsonify({'status': 'ok'}), 200
+
+
+@app.route('/api/health')
+def api_health():
+    probe = request.args.get('probe') in ('1', 'true', 'yes')
+    try:
+        from health import run_health_checks
+        report = run_health_checks(probe_network=probe)
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 503
+    return jsonify(report), (200 if report['ok'] else 503)
+
+
 app.secret_key = _get_or_create_secret_key()
 
 # Configure session cookie settings
@@ -86,6 +106,15 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Initialize database
 init_db()
+
+# Run startup health checks (yt-dlp + configured LLM). Non-fatal: logs clear,
+# actionable errors so operators catch the top outage classes (PIC-34/PIC-42)
+# before a user does. Results are also exposed via /api/health.
+try:
+    from health import run_startup_health_check
+    run_startup_health_check()
+except Exception as _health_exc:  # never let health checks block startup
+    print(f"[Health] startup health check skipped: {_health_exc}")
 
 # Initialize job manager
 job_manager = init_job_manager(socketio)
