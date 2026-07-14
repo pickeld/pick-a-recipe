@@ -45,9 +45,15 @@
                 Login
             </button>
         </form>
+
+        {% if google_enabled %}
+        <div class="login-divider" style="text-align:center; margin: 1rem 0; color: #888;">or</div>
+        <a href="{{ url_for('auth_google') }}" class="btn btn-secondary btn-block" style="display:flex; align-items:center; justify-content:center; gap:0.5rem;">
+            <i class="fab fa-google"></i> Sign in with Google
+        </a>
+        {% endif %}
         
         <div class="login-footer">
-            <p class="hint">Default credentials: admin / admin123</p>
             <button id="install-btn" class="btn btn-secondary btn-block" style="display: none; margin-top: 1rem;">
                 <i class="fas fa-download"></i>
                 Install App

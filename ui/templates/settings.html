@@ -226,6 +226,34 @@
                 <small class="form-hint">When enabled, you'll see a preview of the recipe and must confirm before it's uploaded to Tandoor or Mealie.</small>
             </div>
         </div>
+
+        <!-- Queue & Auth Settings -->
+        <div class="settings-section">
+            <h2><i class="fas fa-stream"></i> Queue & Access</h2>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="max_concurrent_jobs">Max Concurrent Jobs</label>
+                    <input type="number" id="max_concurrent_jobs" name="max_concurrent_jobs"
+                           min="1" max="16" value="{{ config.max_concurrent_jobs or '3' }}">
+                    <small class="form-hint">Currently active: {{ max_concurrent }}. Override with MAX_CONCURRENT_JOBS env var.</small>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="allow_registration" name="allow_registration"
+                           {% if config.allow_registration != 'false' %}checked{% endif %}>
+                    <span class="checkbox-text">Allow new user registrations (Google SSO)</span>
+                </label>
+            </div>
+
+            {% if google_oauth_configured %}
+            <p class="form-hint"><i class="fab fa-google"></i> Google SSO is configured via GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.</p>
+            {% else %}
+            <p class="form-hint">Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars to enable Google sign-in.</p>
+            {% endif %}
+        </div>
         
         <div class="form-actions">
             <button type="submit" class="btn btn-primary">
@@ -258,6 +286,23 @@
             </div>
         </div>
     </div>
+
+    {% if users %}
+    <div class="settings-section">
+        <h2><i class="fas fa-users"></i> Users</h2>
+        <ul class="users-list">
+            {% for u in users %}
+            <li>{{ u.username }} ({{ u.auth_provider }}){% if u.is_admin %} — admin{% endif %}
+                {% if u.username != session.user %}
+                <button type="button" class="btn btn-icon delete-user-btn" data-username="{{ u.username }}" title="Delete user">
+                    <i class="fas fa-trash"></i>
+                </button>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
     
     <!-- Change Password Section -->
     <div class="settings-section password-section">
@@ -381,6 +426,16 @@ document.getElementById('cookies-file-upload').addEventListener('change', async 
     
     // Reset the file input
     e.target.value = '';
+});
+
+document.querySelectorAll('.delete-user-btn').forEach(btn => {
+    btn.addEventListener('click', async function() {
+        const username = this.dataset.username;
+        if (!confirm('Delete user ' + username + '?')) return;
+        const resp = await fetch('/api/users/' + encodeURIComponent(username), { method: 'DELETE' });
+        if (resp.ok) location.reload();
+        else alert('Failed to delete user');
+    });
 });
 </script>
 {% endblock %}

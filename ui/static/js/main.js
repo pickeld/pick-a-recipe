@@ -7,14 +7,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // DOM Elements - declared early so they're available for checkForSharedContent
     const videoUrlInput = document.getElementById('video-url');
     
-    // Check for shared URL from Web Share Target API
-    checkForSharedContent();
-    
     // Initialize Socket.IO connection
     const socket = io();
     
     // Job state management
-    const activeJobs = new Map();  // job_id -> job data
+    const activeJobs = new Map();
+    const appConfig = window.APP_CONFIG || { maxConcurrent: 3, autoStart: false, sharedUrl: '' };
+    const maxConcurrent = appConfig.maxConcurrent || 3;
     const processBtn = document.getElementById('process-btn');
     const jobsSection = document.getElementById('jobs-section');
     const jobsList = document.getElementById('jobs-list');
@@ -59,7 +58,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     socket.on('job_progress', function(data) {
-        updateJobProgress(data.job_id, data.stage, data.message, data.percent, data.video_title);
+        updateJobProgress(data.job_id, data.stage, data.message, data.percent, data.video_title, data.queue_position);
     });
     
     socket.on('job_complete', function(data) {
@@ -96,6 +95,12 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (processBtn) {
         processBtn.addEventListener('click', startNewJob);
+    }
+
+    const batchBtn = document.getElementById('batch-process-btn');
+    const batchUrls = document.getElementById('batch-urls');
+    if (batchBtn && batchUrls) {
+        batchBtn.addEventListener('click', startBatchJobs);
     }
     
     if (videoUrlInput) {
@@ -146,12 +151,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        // Check if we already have 3 active jobs
-        if (activeJobs.size >= 3) {
-            showNotification('Maximum 3 concurrent jobs allowed. Please wait for one to complete.', 'warning');
-            return;
-        }
-        
+        // Queue unlimited jobs — server manages concurrency
         try {
             const response = await fetch('/api/jobs', {
                 method: 'POST',
@@ -173,11 +173,13 @@ document.addEventListener('DOMContentLoaded', function() {
             activeJobs.set(jobId, {
                 id: jobId,
                 url: url,
-                status: 'pending',
+                status: data.status || 'queued',
                 progress: 0,
-                stage: 'pending',
-                message: 'Starting...',
-                video_title: null
+                stage: data.status === 'queued' ? 'queued' : 'pending',
+                message: data.queue_position > 1
+                    ? `Queued — position ${data.queue_position}` : 'Starting...',
+                video_title: null,
+                queue_position: data.queue_position || 0,
             });
             
             // Subscribe to job updates
@@ -192,12 +194,62 @@ document.addEventListener('DOMContentLoaded', function() {
             // Show jobs section
             updateJobsDisplay();
             
-            showNotification('Job started!', 'success');
+            showNotification(
+                data.queue_position > 1 ? `Job queued (position ${data.queue_position})` : 'Job started!',
+                'success'
+            );
+
+            if (window.PickARecipeNotifications) {
+                PickARecipeNotifications.requestPermission();
+            }
             
         } catch (error) {
             console.error('Error starting job:', error);
             showNotification('Failed to start job', 'error');
         }
+    }
+    
+    async function startBatchJobs() {
+        const raw = batchUrls.value.trim();
+        if (!raw) {
+            showNotification('Enter at least one URL', 'error');
+            return;
+        }
+        const urls = raw.split(/[\n,]+/).map(u => u.trim()).filter(Boolean);
+        try {
+            const response = await fetch('/api/jobs/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ urls }),
+            });
+            const data = await response.json();
+            if (data.error) {
+                showNotification(data.error, 'error');
+                return;
+            }
+            (data.jobs || []).forEach(j => registerJobFromServer(j, j.url));
+            batchUrls.value = '';
+            showNotification(`Queued ${data.count} job(s)`, 'success');
+        } catch (e) {
+            showNotification('Batch queue failed', 'error');
+        }
+    }
+
+    function registerJobFromServer(data, url) {
+        const jobId = data.job_id;
+        if (activeJobs.has(jobId)) return;
+        activeJobs.set(jobId, {
+            id: jobId,
+            url: url,
+            status: data.status || 'queued',
+            progress: 0,
+            stage: 'queued',
+            message: data.queue_position > 1 ? `Queued — position ${data.queue_position}` : 'Starting...',
+            video_title: null,
+        });
+        socket.emit('subscribe_job', { job_id: jobId });
+        createJobCard(jobId, url);
+        updateJobsDisplay();
     }
     
     /**
@@ -266,16 +318,14 @@ document.addEventListener('DOMContentLoaded', function() {
     /**
      * Update job progress
      */
-    function updateJobProgress(jobId, stage, message, percent, videoTitle) {
-        // Update state
+    function updateJobProgress(jobId, stage, message, percent, videoTitle, queuePosition) {
         const job = activeJobs.get(jobId);
         if (job) {
             job.stage = stage;
             job.message = message;
             job.progress = percent;
-            if (videoTitle) {
-                job.video_title = videoTitle;
-            }
+            if (videoTitle) job.video_title = videoTitle;
+            if (queuePosition) job.queue_position = queuePosition;
         }
         
         // Update UI
@@ -299,7 +349,11 @@ document.addEventListener('DOMContentLoaded', function() {
         card.querySelector('.progress-text').textContent = percent + '%';
         
         // Update message
-        card.querySelector('.message-text').textContent = message;
+        let displayMessage = message;
+        if (stage === 'queued' && job && job.queue_position > 0) {
+            displayMessage = `Queued — position ${job.queue_position}`;
+        }
+        card.querySelector('.message-text').textContent = displayMessage;
         
         // Update step indicators
         const stages = ['info', 'download', 'transcribe', 'visual', 'image', 'evaluate', 'upload'];
@@ -363,6 +417,9 @@ document.addEventListener('DOMContentLoaded', function() {
         addCompletedCard(jobId, recipe);
         
         showNotification(`Recipe "${recipe.name || 'Untitled'}" created successfully!`, 'success');
+        if (window.PickARecipeNotifications) {
+            PickARecipeNotifications.onJobComplete(recipe);
+        }
     }
     
     /**
@@ -385,6 +442,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         showNotification(`Job failed: ${error}`, 'error');
+        if (window.PickARecipeNotifications) {
+            PickARecipeNotifications.onJobFailed(error);
+        }
     }
     
     /**
@@ -683,13 +743,18 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function checkForSharedContent() {
         const urlParams = new URLSearchParams(window.location.search);
-        const sharedUrl = urlParams.get('url') || urlParams.get('text');
+        const sharedUrl = urlParams.get('url') || urlParams.get('text') || appConfig.sharedUrl;
+        const autoStart = urlParams.get('auto') in {'1':1,'true':1,'yes':1} || appConfig.autoStart;
         
         if (sharedUrl && videoUrlInput) {
             window.history.replaceState({}, document.title, window.location.pathname);
             videoUrlInput.value = sharedUrl;
-            videoUrlInput.focus();
-            showNotification('URL received! Click "Extract Recipe" to continue.', 'success');
+            if (autoStart) {
+                startNewJob();
+            } else {
+                videoUrlInput.focus();
+                showNotification('URL loaded — click Extract or it will auto-start if queued from retry.', 'success');
+            }
         }
     }
     
@@ -747,4 +812,5 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initialize - restore active jobs on page load
     restoreActiveJobs();
+    checkForSharedContent();
 });

@@ -20,15 +20,20 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from database import (
     init_db, load_config, save_config,
     verify_user, update_password, hash_password,
+    get_user, get_user_by_email, get_user_by_google_id,
+    create_user, list_users, delete_user,
+    user_must_change_password, clear_must_change_password,
+    link_google_account,
     get_history, get_history_entry, get_history_count, delete_history_entry,
     delete_history_entries_bulk, delete_job_entry, delete_jobs_bulk,
     get_combined_history_and_jobs, get_combined_history_and_jobs_count,
     get_job, get_active_jobs,
     create_pending_upload, get_pending_upload, get_pending_uploads,
     confirm_pending_upload, cancel_pending_upload, delete_pending_upload,
-    cleanup_expired_pending_uploads
+    cleanup_expired_pending_uploads, cleanup_old_jobs,
+    save_push_subscription, get_push_subscriptions, delete_push_subscription,
 )
-from job_manager import init_job_manager, get_job_manager
+from job_manager import init_job_manager, get_job_manager, resolve_max_concurrent
 
 app = Flask(__name__)
 
@@ -98,8 +103,9 @@ app.secret_key = _get_or_create_secret_key()
 # Configure session cookie settings
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
-    days=30)  # Remember for 30 days
+if os.environ.get('SESSION_COOKIE_SECURE', '').lower() in ('true', '1', 'yes'):
+    app.config['SESSION_COOKIE_SECURE'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 
 # Use threading mode instead of eventlet to avoid monkey-patching issues with SSL/requests
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
@@ -116,20 +122,49 @@ try:
 except Exception as _health_exc:  # never let health checks block startup
     print(f"[Health] startup health check skipped: {_health_exc}")
 
-# Initialize job manager
+# Initialize job manager (process func registered after definition below)
 job_manager = init_job_manager(socketio)
 
+# OAuth (Google SSO) — optional, enabled when env vars are set
+oauth = None
+if os.environ.get('GOOGLE_CLIENT_ID') and os.environ.get('GOOGLE_CLIENT_SECRET'):
+    from authlib.integrations.flask_client import OAuth
+    oauth = OAuth(app)
+    oauth.register(
+        name='google',
+        client_id=os.environ['GOOGLE_CLIENT_ID'],
+        client_secret=os.environ['GOOGLE_CLIENT_SECRET'],
+        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+        client_kwargs={'scope': 'openid email profile'},
+    )
+
 # Store pending recipe uploads waiting for confirmation
-# Key: upload_id, Value: {'recipe': recipe_data, 'image_path': path, 'event': threading.Event(), 'confirmed': bool, 'job_id': str}
 pending_uploads = {}
+
+
+def _is_logged_in() -> bool:
+    return 'user' in session
+
+
+def _maybe_disable_registration_after_setup(username: str) -> None:
+    """After first real login (non-default password), suggest locking registrations."""
+    cfg = load_config()
+    if cfg.get('allow_registration', 'true') == 'true':
+        user = get_user(username)
+        if user and not user.get('must_change_password'):
+            # Leave enabled but admin can disable in settings
+            pass
 
 
 def login_required(f):
     """Decorator to require login for routes."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'user' not in session:
+        if not _is_logged_in():
             return redirect(url_for('login'))
+        if user_must_change_password(session['user']):
+            if request.endpoint not in ('setup_password', 'logout', 'static'):
+                return redirect(url_for('setup_password'))
         return f(*args, **kwargs)
     return decorated_function
 
@@ -138,10 +173,54 @@ def api_login_required(f):
     """Decorator to require login for API routes (returns JSON error)."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'user' not in session:
+        if not _is_logged_in():
             return jsonify({'error': 'Authentication required'}), 401
+        if user_must_change_password(session['user']):
+            return jsonify({'error': 'Password change required', 'redirect': '/setup-password'}), 403
         return f(*args, **kwargs)
     return decorated_function
+
+
+def _socketio_authenticated() -> bool:
+    return _is_logged_in()
+
+
+def _start_job_for_url(url: str, *, retry_from_history_id: int | None = None, priority: int = 0) -> dict:
+    jm = get_job_manager()
+    job_id = jm.create_new_job(url, retry_from_history_id=retry_from_history_id, priority=priority)
+    jm.start_job(job_id, process_video_job)
+    job = get_job(job_id)
+    return {
+        'job_id': job_id,
+        'status': job.get('status', 'queued'),
+        'url': url,
+        'queue_position': job.get('queue_position', get_queue_position_safe(job_id)),
+        'message': 'Job queued for processing',
+    }
+
+
+def get_queue_position_safe(job_id: str) -> int:
+    from database import get_queue_position
+    return get_queue_position(job_id)
+
+
+def _run_cleanup_scheduler() -> None:
+    """Periodic cleanup of old jobs and expired pending uploads."""
+    def loop():
+        import time
+        while True:
+            time.sleep(3600)
+            try:
+                cleanup_old_jobs(hours=72)
+                cleanup_expired_pending_uploads()
+            except Exception as exc:
+                print(f"[Cleanup] error: {exc}")
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+
+
+_run_cleanup_scheduler()
 
 
 @app.route('/')
@@ -161,6 +240,7 @@ def index():
         request.args.get('text') or
         ''
     )
+    auto_from_share = session.pop('auto_start_extraction', False)
     
     # Extract URL from shared text if needed (apps like TikTok share URLs in text)
     if shared_url and not shared_url.startswith('http'):
@@ -169,7 +249,26 @@ def index():
         if url_match:
             shared_url = url_match.group(1)
     
-    return render_template('index.html', shared_url=shared_url)
+    return render_template(
+        'index.html',
+        shared_url=shared_url,
+        auto_start=(
+            request.args.get('auto') in ('1', 'true', 'yes')
+            or auto_from_share
+        ),
+        max_concurrent=resolve_max_concurrent(),
+    )
+
+
+@app.route('/jobs/<job_id>')
+@login_required
+def job_detail(job_id):
+    """Dedicated progress page for a single job."""
+    job = get_job(job_id)
+    if not job:
+        flash('Job not found', 'error')
+        return redirect(url_for('index'))
+    return render_template('job.html', job=job, max_concurrent=resolve_max_concurrent())
 
 
 @app.route('/history')
@@ -218,6 +317,7 @@ def share():
     
     # Store in session BEFORE checking auth - this preserves the URL through login
     session['shared_url'] = final_url
+    session['auto_start_extraction'] = True
     
     # If user is not logged in, redirect to login (URL is preserved in session)
     if 'user' not in session:
@@ -230,6 +330,11 @@ def share():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Login page."""
+    if _is_logged_in():
+        if user_must_change_password(session['user']):
+            return redirect(url_for('setup_password'))
+        return redirect(url_for('index'))
+
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
@@ -237,15 +342,127 @@ def login():
 
         if verify_user(username, password):
             session['user'] = username
-            # Make session permanent if "Remember Me" is checked
             if remember_me:
                 session.permanent = True
+            if user_must_change_password(username):
+                flash('Please set a new password before continuing.', 'warning')
+                return redirect(url_for('setup_password'))
+            _maybe_disable_registration_after_setup(username)
             flash('Login successful!', 'success')
             return redirect(url_for('index'))
-        else:
-            flash('Invalid username or password', 'error')
+        flash('Invalid username or password', 'error')
 
-    return render_template('login.html')
+    google_enabled = oauth is not None
+    return render_template('login.html', google_enabled=google_enabled)
+
+
+@app.route('/setup-password', methods=['GET', 'POST'])
+def setup_password():
+    """Force password change for default or flagged accounts."""
+    if not _is_logged_in():
+        return redirect(url_for('login'))
+
+    username = session['user']
+    user = get_user(username)
+    if not user:
+        return redirect(url_for('logout'))
+
+    if request.method == 'POST':
+        new_password = request.form.get('new_password', '')
+        confirm_password = request.form.get('confirm_password', '')
+        current_password = request.form.get('current_password', '')
+
+        if user.get('auth_provider') == 'google' and not user.get('password_hash'):
+            if new_password != confirm_password:
+                flash('Passwords do not match', 'error')
+            elif len(new_password) < 8:
+                flash('Password must be at least 8 characters', 'error')
+            else:
+                update_password(username, new_password)
+                clear_must_change_password(username)
+                flash('Password set successfully!', 'success')
+                return redirect(url_for('index'))
+        elif not verify_user(username, current_password) and user_must_change_password(username):
+            # Default admin first login — current password optional if still default
+            if username == 'admin' and current_password in ('', 'admin123'):
+                pass
+            elif not verify_user(username, current_password):
+                flash('Current password is incorrect', 'error')
+                return render_template('setup_password.html', user=user)
+
+        if new_password != confirm_password:
+            flash('Passwords do not match', 'error')
+        elif len(new_password) < 8:
+            flash('Password must be at least 8 characters', 'error')
+        else:
+            update_password(username, new_password)
+            clear_must_change_password(username)
+            cfg = load_config()
+            if cfg.get('allow_registration', 'true') == 'true':
+                save_config({**cfg, 'allow_registration': 'false'})
+            flash('Password updated! New registrations are now disabled.', 'success')
+            return redirect(url_for('index'))
+
+    return render_template('setup_password.html', user=user)
+
+
+@app.route('/auth/google')
+def auth_google():
+    if oauth is None:
+        flash('Google sign-in is not configured', 'error')
+        return redirect(url_for('login'))
+    redirect_uri = url_for('auth_google_callback', _external=True)
+    return oauth.google.authorize_redirect(redirect_uri)
+
+
+@app.route('/auth/google/callback')
+def auth_google_callback():
+    if oauth is None:
+        return redirect(url_for('login'))
+
+    try:
+        token = oauth.google.authorize_access_token()
+        userinfo = token.get('userinfo') or oauth.google.parse_id_token(token)
+    except Exception:
+        flash('Google sign-in failed', 'error')
+        return redirect(url_for('login'))
+
+    email = userinfo.get('email')
+    google_id = userinfo.get('sub')
+    name = userinfo.get('name') or email.split('@')[0] if email else 'user'
+    avatar = userinfo.get('picture')
+
+    user = get_user_by_google_id(google_id) or (get_user_by_email(email) if email else None)
+    cfg = load_config()
+
+    if not user:
+        if cfg.get('allow_registration', 'true') != 'true':
+            flash('Registration is disabled. Contact the administrator.', 'error')
+            return redirect(url_for('login'))
+        username = name.replace(' ', '_').lower()[:32]
+        base = username
+        n = 1
+        while get_user(username):
+            username = f"{base}{n}"
+            n += 1
+        create_user(
+            username,
+            password=None,
+            email=email,
+            google_id=google_id,
+            auth_provider='google',
+            avatar_url=avatar,
+        )
+        user = get_user(username)
+    else:
+        link_google_account(user['username'], google_id, email or user.get('email', ''), avatar)
+
+    session['user'] = user['username']
+    session.permanent = True
+    if user_must_change_password(user['username']):
+        return redirect(url_for('setup_password'))
+    flash('Signed in with Google!', 'success')
+    return redirect(url_for('index'))
 
 
 @app.route('/logout')
@@ -284,12 +501,22 @@ def settings():
         # Checkbox: present in form data only when checked
         config['confirm_before_upload'] = 'true' if request.form.get(
             'confirm_before_upload') else 'false'
+        config['max_concurrent_jobs'] = request.form.get('max_concurrent_jobs', '3')
+        config['allow_registration'] = 'true' if request.form.get('allow_registration') else 'false'
 
         save_config(config)
+        get_job_manager().refresh_concurrency()
         flash('Settings saved successfully!', 'success')
         return redirect(url_for('settings'))
 
-    return render_template('settings.html', config=config)
+    users = list_users() if (get_user(session.get('user')) or {}).get('is_admin') else []
+    return render_template(
+        'settings.html',
+        config=config,
+        users=users,
+        google_oauth_configured=oauth is not None,
+        max_concurrent=resolve_max_concurrent(),
+    )
 
 
 @app.route('/change-password', methods=['POST'])
@@ -310,6 +537,7 @@ def change_password():
         flash('Password must be at least 6 characters', 'error')
     else:
         update_password(username, new_password)
+        clear_must_change_password(username)
         flash('Password changed successfully!', 'success')
 
     return redirect(url_for('settings'))
@@ -321,28 +549,63 @@ def change_password():
 @api_login_required
 def create_job():
     """Create a new analysis job."""
-    data = request.get_json()
-    url = data.get('url', '')
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
 
     if not url:
         return jsonify({'error': 'URL is required'}), 400
 
-    # Create job and start processing
+    result = _start_job_for_url(url)
+    return jsonify(result)
+
+
+@app.route('/api/jobs/batch', methods=['POST'])
+@api_login_required
+def create_jobs_batch():
+    """Create multiple jobs from a list of URLs."""
+    data = request.get_json() or {}
+    urls = data.get('urls') or []
+    if isinstance(urls, str):
+        urls = [u.strip() for u in urls.replace(',', '\n').split('\n') if u.strip()]
+    if not urls:
+        return jsonify({'error': 'No URLs provided'}), 400
+
+    jobs = []
+    for url in urls[:50]:
+        jobs.append(_start_job_for_url(url.strip()))
+    return jsonify({'jobs': jobs, 'count': len(jobs)})
+
+
+@app.route('/api/jobs/retry', methods=['POST'])
+@api_login_required
+def retry_job():
+    """Retry a failed extraction — starts immediately with live progress."""
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
+    history_id = data.get('history_id')
+
+    if not url and history_id:
+        item = get_history_entry(int(history_id))
+        if item:
+            url = item.get('url', '')
+
+    if not url:
+        return jsonify({'error': 'URL or history_id is required'}), 400
+
+    result = _start_job_for_url(
+        url,
+        retry_from_history_id=int(history_id) if history_id else None,
+        priority=1,
+    )
+    result['auto_start'] = True
+    return jsonify(result)
+
+
+@app.route('/api/jobs/queue', methods=['GET'])
+@api_login_required
+def queue_stats():
     jm = get_job_manager()
-    job_id = jm.create_new_job(url)
-    
-    # Start the job processing
-    jm.start_job(job_id, process_video_job)
-    
-    # Get job info
-    job = get_job(job_id)
-    
-    return jsonify({
-        'job_id': job_id,
-        'status': 'pending',
-        'url': url,
-        'message': 'Job created and processing started'
-    })
+    return jsonify(jm.get_queue_stats())
 
 
 @app.route('/api/jobs', methods=['GET'])
@@ -815,411 +1078,161 @@ def cancel_pending_upload_api(upload_id):
 
 # ===== Legacy API (kept for backward compatibility) =====
 
+@app.route('/api/push/subscribe', methods=['POST'])
+@api_login_required
+def push_subscribe():
+    data = request.get_json() or {}
+    sub = data.get('subscription') or data
+    endpoint = sub.get('endpoint')
+    keys = sub.get('keys') or {}
+    if not endpoint or not keys.get('p256dh') or not keys.get('auth'):
+        return jsonify({'error': 'Invalid subscription'}), 400
+    ok = save_push_subscription(session['user'], endpoint, keys['p256dh'], keys['auth'])
+    return jsonify({'status': 'subscribed' if ok else 'error'})
+
+
+@app.route('/api/push/unsubscribe', methods=['POST'])
+@api_login_required
+def push_unsubscribe():
+    data = request.get_json() or {}
+    endpoint = data.get('endpoint')
+    if endpoint:
+        delete_push_subscription(endpoint)
+    return jsonify({'status': 'unsubscribed'})
+
+
+@app.route('/api/users/<username>', methods=['DELETE'])
+@api_login_required
+def delete_user_api(username):
+    me = get_user(session['user'])
+    if not me or not me.get('is_admin'):
+        return jsonify({'error': 'Admin required'}), 403
+    if username == session['user']:
+        return jsonify({'error': 'Cannot delete yourself'}), 400
+    if delete_user(username):
+        return jsonify({'status': 'deleted'})
+    return jsonify({'error': 'User not found'}), 404
+
+
 @app.route('/api/process', methods=['POST'])
 @api_login_required
 def process_video():
     """Start video processing (legacy endpoint - redirects to job system)."""
-    data = request.get_json()
+    data = request.get_json() or {}
     url = data.get('url', '')
-
     if not url:
         return jsonify({'error': 'URL is required'}), 400
-
-    # Create job using new system
-    jm = get_job_manager()
-    job_id = jm.create_new_job(url)
-    jm.start_job(job_id, process_video_job)
-    
-    return jsonify({
-        'status': 'started',
-        'message': 'Processing started',
-        'job_id': job_id
-    })
+    result = _start_job_for_url(url)
+    return jsonify({'status': 'started', 'message': 'Processing started', **result})
 
 
 def process_video_job(job_id, jm):
-    """Background task to process video with job-based progress updates."""
+    """Background task — delegates to shared pipeline module."""
+    from pipeline import (
+        PipelineStats,
+        PreviewWaiter,
+        run_extraction_pipeline,
+    )
+    from config import config as app_config
+
     job = get_job(job_id)
     if not job:
         return
-    
-    url = job['url']
-    
-    try:
-        # Import modules - they will read config from SQLite via config.py
-        from config import config
-        from video_downloader import VideoDownloader
-        from transcriber import Transcriber
-        from chef import Chef
-        from image_extractor import extract_dish_image_candidates
 
-        # Reload config to get latest values from database
-        config.reload()
+    stats = PipelineStats()
 
-        # Check for cancellation
-        if jm.is_cancelled(job_id):
-            return
+    class Reporter:
+        def is_cancelled(self):
+            return jm.is_cancelled(job_id)
 
-        # Step 1: Get video info
-        jm.update_progress(job_id, 'info', 'Fetching video information...', 10)
-        downloader = VideoDownloader(url)
-        item = downloader._get_info()
-        description = item.get("description", "No description available.")
-        title = item.get("title", "Untitled")
-        jm.update_progress(job_id, 'info', f'Video: {title}', 15, video_title=title)
+        def update(self, stage, message, percent, video_title=None):
+            jm.update_progress(job_id, stage, message, percent, video_title)
 
-        if jm.is_cancelled(job_id):
-            return
+    reporter = Reporter()
 
-        # Step 2: Download video
-        jm.update_progress(job_id, 'download', 'Downloading video...', 20)
-        vid_id, video_path = downloader._download_video()
-        if vid_id is None:
-            jm.fail_job(job_id, 'Failed to download video')
-            return
-        dish_dir = os.path.join("/tmp", vid_id)
-        jm.update_progress(job_id, 'download', 'Video downloaded successfully', 30)
+    preview = None
+    if app_config.CONFIRM_BEFORE_UPLOAD:
+        def emit_preview(payload):
+            socketio.emit('recipe_preview', payload, room=f'job_{job_id}')
+            socketio.emit('recipe_preview', payload)
 
-        if jm.is_cancelled(job_id):
-            return
-
-        # Step 3: Transcribe audio
-        jm.update_progress(job_id, 'transcribe', 'Transcribing audio...', 35)
-        
-        transcriber = Transcriber(video_path)
-        lang = config.TARGET_LANGUAGE
-
-        audio_cache = os.path.join(dish_dir, f"transcription_{lang}.txt")
-        if os.path.exists(audio_cache):
-            jm.update_progress(job_id, 'transcribe', 'Using cached transcription', 40)
-            with open(audio_cache, "r") as f:
-                transcription = f.read()
-        else:
-            transcription = transcriber.transcribe()
-            with open(audio_cache, "w") as f:
-                f.write(transcription)
-        jm.update_progress(job_id, 'transcribe', 'Audio transcribed', 50)
-
-        if jm.is_cancelled(job_id):
-            return
-
-        # Step 4: Extract visual text
-        jm.update_progress(job_id, 'visual', 'Extracting on-screen text...', 55)
-        visual_text = ""
-        visual_cache = os.path.join(dish_dir, f"visual_{lang}.txt")
-        if os.path.exists(visual_cache):
-            jm.update_progress(job_id, 'visual', 'Using cached visual text', 60)
-            with open(visual_cache, "r") as f:
-                visual_text = f.read()
-        else:
-            try:
-                visual_text = transcriber.extract_visual_text()
-                with open(visual_cache, "w") as f:
-                    f.write(visual_text)
-            except Exception as e:
-                jm.update_progress(job_id, 'visual', f'Warning: Could not extract visual text: {e}', 60)
-        jm.update_progress(job_id, 'visual', 'Visual text extracted', 65)
-
-        if jm.is_cancelled(job_id):
-            return
-
-        # Combine transcription
-        combined_transcription = transcription
-        if visual_text:
-            combined_transcription = f"""=== AUDIO TRANSCRIPTION ===
-{transcription}
-
-=== ON-SCREEN TEXT (ingredients, instructions, etc.) ===
-{visual_text}"""
-
-        # Step 5: Extract dish image candidates
-        jm.update_progress(job_id, 'image', 'Extracting dish image candidates...', 70)
-        image_path = None
-        image_candidates = []
-        best_image_index = 0
-        image_cache = os.path.join(dish_dir, "dish.jpg")
-        frames_dir = os.path.join(dish_dir, "dish_frames")
-        
-        # Check if we have cached candidates
-        if os.path.exists(frames_dir) and os.path.exists(image_cache):
-            jm.update_progress(job_id, 'image', 'Using cached dish images', 75)
-            image_path = image_cache
-            # Load all cached candidate images
-            candidate_files = sorted([
-                os.path.join(frames_dir, f) for f in os.listdir(frames_dir)
-                if f.startswith('dish_candidate_') and f.endswith('.jpg')
-            ])
-            image_candidates = candidate_files
-        else:
-            try:
-                result = extract_dish_image_candidates(video_path)
-                image_path = result.get('best_image')
-                image_candidates = result.get('candidates', [])
-                best_image_index = result.get('best_index', 0)
-            except Exception as e:
-                jm.update_progress(job_id, 'image', f'Warning: Could not extract image: {e}', 75)
-        jm.update_progress(job_id, 'image', 'Image candidates extracted', 80)
-
-        if jm.is_cancelled(job_id):
-            return
-
-        # Step 6: Create recipe with AI
-        jm.update_progress(job_id, 'evaluate', 'Creating recipe with AI...', 85)
-        chef = Chef(source_url=url, description=description,
-                    transcription=combined_transcription)
-        recipe_data = chef.create_recipe()
-
-        if not recipe_data:
-            jm.fail_job(job_id, 'Failed to create recipe')
-            return
-
-        jm.update_progress(job_id, 'evaluate', 'Recipe created successfully', 90)
-
-        if jm.is_cancelled(job_id):
-            return
-
-        # Step 7: Upload to target (with optional preview confirmation)
-        if config.CONFIRM_BEFORE_UPLOAD:
-            # Show preview and wait for user confirmation
-            jm.update_progress(job_id, 'preview', 'Waiting for your confirmation...', 90)
-
-            # Prepare image data for preview if available (best image first, then candidates)
-            image_data = None
-            if image_path and os.path.exists(image_path):
-                with open(image_path, 'rb') as f:
-                    image_data = base64.b64encode(f.read()).decode('utf-8')
-            
-            # Prepare all candidate images as base64
-            candidate_images_data = []
-            for idx, candidate_path in enumerate(image_candidates):
-                if os.path.exists(candidate_path):
-                    with open(candidate_path, 'rb') as f:
-                        candidate_images_data.append({
-                            'index': idx,
-                            'data': base64.b64encode(f.read()).decode('utf-8'),
-                            'path': candidate_path,
-                            'is_best': idx == best_image_index
-                        })
-
-            # Create event for waiting (using threading.Event)
-            confirm_event = threading.Event()
-            upload_id = secrets.token_hex(16)
-
-            # Store in-memory for WebSocket-based confirmation
-            pending_uploads[upload_id] = {
-                'recipe': recipe_data,
-                'image_path': image_path,
-                'image_candidates': image_candidates,
-                'output_target': config.OUTPUT_TARGET,
-                'event': confirm_event,
-                'confirmed': None,
-                'selected_image_index': best_image_index,
-                'job_id': job_id
-            }
-            
-            # Also store in database for cross-device/session confirmation via REST API
-            create_pending_upload(
-                upload_id=upload_id,
-                job_id=job_id,
-                recipe_data=recipe_data,
-                image_path=image_path,
-                image_candidates=image_candidates,
-                output_target=config.OUTPUT_TARGET,
-                best_image_index=best_image_index,
-                timeout_minutes=5
-            )
-
-            # Determine display target for preview
-            if config.EXPORT_TO_BOTH:
-                display_target = 'Tandoor & Mealie'
-            else:
-                display_target = config.OUTPUT_TARGET.capitalize()
-
-            # Send preview to client with all candidate images
-            socketio.emit('recipe_preview', {
+        def emit_cancelled():
+            socketio.emit('recipe_cancelled', {
                 'job_id': job_id,
-                'upload_id': upload_id,
-                'recipe': recipe_data,
-                'image_data': image_data,
-                'candidate_images': candidate_images_data,
-                'best_image_index': best_image_index,
-                'output_target': display_target,
-                'export_to_both': config.EXPORT_TO_BOTH
+                'message': 'Recipe upload was cancelled',
             }, room=f'job_{job_id}')
-            
-            # Also broadcast for legacy clients
-            socketio.emit('recipe_preview', {
+            socketio.emit('recipe_cancelled', {
                 'job_id': job_id,
-                'upload_id': upload_id,
-                'recipe': recipe_data,
-                'image_data': image_data,
-                'candidate_images': candidate_images_data,
-                'best_image_index': best_image_index,
-                'output_target': display_target,
-                'export_to_both': config.EXPORT_TO_BOTH
+                'message': 'Recipe upload was cancelled',
             })
 
-            # Wait for user response with polling for database changes
-            # This allows confirmation from any device/session via REST API
-            import time
-            timeout_seconds = 300  # 5 minute timeout
-            poll_interval = 1  # Check database every second
-            elapsed = 0
-            confirmed = False
-            db_confirmed = False
-            selected_idx = best_image_index
-            
-            while elapsed < timeout_seconds:
-                # Check in-memory event (WebSocket confirmation)
-                if confirm_event.wait(timeout=poll_interval):
-                    confirmed = True
-                    break
-                
-                # Check database for REST API confirmation
-                db_upload = get_pending_upload(upload_id)
-                if db_upload:
-                    if db_upload['status'] == 'confirmed':
-                        db_confirmed = True
-                        confirmed = True
-                        selected_idx = db_upload.get('selected_image_index', best_image_index)
-                        break
-                    elif db_upload['status'] == 'cancelled':
-                        # Cancelled via REST API
-                        confirmed = True  # Event was handled
-                        break
-                    elif db_upload['status'] == 'expired':
-                        # Expired
-                        break
-                
-                elapsed += poll_interval
-                
-                # Check for job cancellation
-                if jm.is_cancelled(job_id):
-                    delete_pending_upload(upload_id)
-                    pending_uploads.pop(upload_id, None)
-                    return
-            
-            # Clean up database record
-            db_upload = get_pending_upload(upload_id)
-            delete_pending_upload(upload_id)
-            
-            # Check if we actually got a confirmation or just timed out
-            pending_data = pending_uploads.pop(upload_id, None)
-            
-            if not confirmed and elapsed >= timeout_seconds:
-                jm.fail_job(job_id, 'Upload confirmation timed out')
-                return
-            
-            # Determine confirmation status from either source
-            was_confirmed = False
-            if db_confirmed:
-                was_confirmed = (db_upload and db_upload['status'] == 'confirmed')
-            elif pending_data:
-                was_confirmed = pending_data.get('confirmed', False)
-            
-            if not was_confirmed:
-                jm.update_progress(job_id, 'cancelled', 'Upload cancelled by user', 100)
-                socketio.emit('recipe_cancelled', {
-                    'job_id': job_id,
-                    'message': 'Recipe upload was cancelled'
-                }, room=f'job_{job_id}')
-                socketio.emit('recipe_cancelled', {
-                    'job_id': job_id,
-                    'message': 'Recipe upload was cancelled'
-                })
-                return
-            
-            # Use the user-selected image if available
-            if not db_confirmed and pending_data:
-                selected_idx = pending_data.get('selected_image_index', best_image_index)
-            if image_candidates and 0 <= selected_idx < len(image_candidates):
-                image_path = image_candidates[selected_idx]
+        preview = PreviewWaiter(
+            job_id=job_id,
+            recipe_data={},
+            image_path=None,
+            image_candidates=[],
+            best_image_index=0,
+            output_target=app_config.OUTPUT_TARGET,
+            export_to_both=app_config.EXPORT_TO_BOTH,
+            emit_preview=emit_preview,
+            wait_for_confirmation=lambda *a, **k: (False, 0),
+            pending_uploads=pending_uploads,
+            create_pending_upload_fn=create_pending_upload,
+            get_pending_upload_fn=get_pending_upload,
+            delete_pending_upload_fn=delete_pending_upload,
+            is_cancelled=lambda: jm.is_cancelled(job_id),
+            socketio_emit_cancelled=emit_cancelled,
+        )
 
-            jm.update_progress(job_id, 'upload', f'Uploading to {config.OUTPUT_TARGET}...', 95)
+    result = run_extraction_pipeline(job['url'], reporter, stats=stats, preview=preview)
+
+    if result.error == 'cancelled':
+        return
+    if result.error:
+        if 'confirmation timed out' in (result.error or '').lower():
+            jm.fail_job(job_id, 'Upload confirmation timed out', stats.llm_tokens_estimate)
+        elif 'cancelled' in (result.error or '').lower():
+            jm.update_progress(job_id, 'cancelled', 'Upload cancelled by user', 100)
         else:
-            jm.update_progress(job_id, 'upload', f'Uploading to {config.OUTPUT_TARGET}...', 95)
+            jm.fail_job(job_id, result.error, stats.llm_tokens_estimate)
+        return
 
-        if jm.is_cancelled(job_id):
-            return
-
-        # Determine upload targets
-        upload_targets = []
-        if config.EXPORT_TO_BOTH:
-            # Export to both Tandoor and Mealie
-            upload_targets = ['tandoor', 'mealie']
-            jm.update_progress(job_id, 'upload', 'Uploading to Tandoor and Mealie...', 95)
-        else:
-            # Export to single target
-            upload_targets = [config.OUTPUT_TARGET]
-
-        upload_results = []
-        
-        for target in upload_targets:
-            try:
-                if target == 'tandoor':
-                    from tandoor import Tandoor
-                    tandoor = Tandoor()
-                    result = tandoor.create_recipe(recipe_data)
-                    if image_path and result.get("id"):
-                        tandoor.upload_image(result["id"], image_path)
-                    upload_results.append(('tandoor', True, None))
-                elif target == 'mealie':
-                    from mealie import Mealie
-                    mealie = Mealie()
-                    result = mealie.create_recipe(recipe_data)
-                    recipe_slug = result.get("slug") or result.get("id")
-                    if image_path and recipe_slug:
-                        mealie.upload_image(recipe_slug, image_path)
-                    upload_results.append(('mealie', True, None))
-            except Exception as upload_error:
-                upload_results.append((target, False, str(upload_error)))
-
-        # Determine final output target for history
-        final_target = ', '.join(upload_targets) if config.EXPORT_TO_BOTH else config.OUTPUT_TARGET
-        
-        # Check if any uploads failed
-        failed_uploads = [r for r in upload_results if not r[1]]
-        if failed_uploads and len(failed_uploads) == len(upload_targets):
-            # All uploads failed
-            error_msgs = '; '.join([f"{r[0]}: {r[2]}" for r in failed_uploads])
-            jm.fail_job(job_id, f'All uploads failed: {error_msgs}')
-            return
-        elif failed_uploads:
-            # Some uploads succeeded, some failed
-            success_targets = [r[0] for r in upload_results if r[1]]
-            failed_msgs = '; '.join([f"{r[0]}: {r[2]}" for r in failed_uploads])
-            jm.complete_job(job_id, recipe_data, image_path, ', '.join(success_targets))
-            jm.update_progress(job_id, 'complete',
-                f'Recipe uploaded to {", ".join(success_targets)}. Failed: {failed_msgs}', 100)
-        else:
-            # All uploads succeeded
-            jm.complete_job(job_id, recipe_data, image_path, final_target)
-            jm.update_progress(job_id, 'complete', f'Recipe uploaded successfully to {final_target}!', 100)
-
-    except Exception as e:
-        jm.fail_job(job_id, f'Error: {str(e)}')
+    jm.complete_job(
+        job_id,
+        result.recipe_data,
+        result.image_path,
+        result.output_target,
+        llm_tokens=result.llm_tokens_estimate or stats.llm_tokens_estimate,
+    )
 
 
 # ===== WebSocket Handlers =====
 
 @socketio.on('connect')
 def handle_connect():
-    """Handle WebSocket connection."""
+    if not _socketio_authenticated():
+        return False
     emit('connected', {'status': 'Connected to server'})
 
 
 @socketio.on('subscribe_job')
 def handle_subscribe_job(data):
-    """Subscribe to a specific job's updates."""
+    if not _socketio_authenticated():
+        return False
     job_id = data.get('job_id')
     if job_id:
+        job = get_job(job_id)
+        if not job:
+            emit('error', {'message': 'Job not found'})
+            return
         join_room(f'job_{job_id}')
         emit('subscribed', {'job_id': job_id, 'status': 'subscribed'})
 
 
 @socketio.on('unsubscribe_job')
 def handle_unsubscribe_job(data):
-    """Unsubscribe from a specific job's updates."""
+    if not _socketio_authenticated():
+        return False
     job_id = data.get('job_id')
     if job_id:
         leave_room(f'job_{job_id}')
@@ -1228,7 +1241,8 @@ def handle_unsubscribe_job(data):
 
 @socketio.on('confirm_upload')
 def handle_confirm_upload(data):
-    """Handle user confirmation of recipe upload."""
+    if not _socketio_authenticated():
+        return False
     upload_id = data.get('upload_id')
     selected_image_index = data.get('selected_image_index')
     if upload_id and upload_id in pending_uploads:
@@ -1241,11 +1255,16 @@ def handle_confirm_upload(data):
 
 @socketio.on('cancel_upload')
 def handle_cancel_upload(data):
-    """Handle user cancellation of recipe upload."""
+    if not _socketio_authenticated():
+        return False
     upload_id = data.get('upload_id')
     if upload_id and upload_id in pending_uploads:
         pending_uploads[upload_id]['confirmed'] = False
         pending_uploads[upload_id]['event'].set()
+
+
+# Register pipeline handler and restore queued jobs from DB
+job_manager.set_process_func(process_video_job)
 
 
 if __name__ == '__main__':

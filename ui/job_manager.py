@@ -1,169 +1,171 @@
 """
 Job Manager for Pick-a-Recipe
-Manages concurrent recipe analysis jobs with progress tracking and persistence.
+Dynamic job queue with configurable concurrency and progress tracking.
 """
 
 import os
 import sys
 import base64
+import queue
 import threading
-from typing import Dict, Optional, Callable, Any, TYPE_CHECKING
-from datetime import datetime
+from typing import Dict, Optional, Callable, TYPE_CHECKING
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from config import config
 from database import (
-    create_job as db_create_job, get_job, get_active_jobs, update_job_progress,
-    fail_job as db_fail_job, cancel_job as db_cancel_job, complete_job as db_complete_job,
-    create_history_entry
+    create_job as db_create_job,
+    get_job,
+    get_active_jobs,
+    get_queued_jobs,
+    update_job_progress,
+    fail_job as db_fail_job,
+    cancel_job as db_cancel_job,
+    complete_job as db_complete_job,
+    create_history_entry,
+    get_queue_position,
+    update_job_tokens,
 )
 
 if TYPE_CHECKING:
     from flask_socketio import SocketIO
 
 
+def resolve_max_concurrent() -> int:
+    env_val = os.environ.get('MAX_CONCURRENT_JOBS')
+    if env_val:
+        try:
+            return max(1, min(16, int(env_val)))
+        except ValueError:
+            pass
+    config.reload()
+    return config.MAX_CONCURRENT_JOBS
+
+
 class JobManager:
-    """
-    Manages concurrent recipe analysis jobs.
-    
-    Features:
-    - Tracks multiple active jobs
-    - Limits concurrent processing via semaphore
-    - Persists job state to database
-    - Emits progress via WebSocket
-    """
-    
-    MAX_CONCURRENT_JOBS = 3
-    
+    """Manages a FIFO job queue with a fixed worker pool."""
+
     def __init__(self, socketio):
-        """
-        Initialize the JobManager.
-        
-        Args:
-            socketio: Flask-SocketIO instance for emitting progress
-        """
         self.socketio = socketio
-        self.active_jobs: Dict[str, dict] = {}  # job_id -> job metadata
+        self.max_concurrent = resolve_max_concurrent()
+        self.active_jobs: Dict[str, dict] = {}
         self.job_threads: Dict[str, threading.Thread] = {}
         self.cancellation_flags: Dict[str, threading.Event] = {}
-        self.semaphore = threading.Semaphore(self.MAX_CONCURRENT_JOBS)
+        self._work_queue: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
-        
-        # Restore any active jobs from database on startup
-        self._restore_active_jobs()
-    
-    def _restore_active_jobs(self):
-        """Restore active jobs from database on startup."""
+        self._workers: list[threading.Thread] = []
+
+        for _ in range(self.max_concurrent):
+            worker = threading.Thread(target=self._worker_loop, daemon=True)
+            worker.start()
+            self._workers.append(worker)
+
+        self._pending_restore = True
+
+    def set_process_func(self, func: Callable) -> None:
+        self._process_func = func
+        if self._pending_restore:
+            self._restore_active_jobs()
+            self._pending_restore = False
+
+    def refresh_concurrency(self) -> None:
+        """Update max concurrent from config/env (applies to new worker spawns only)."""
+        self.max_concurrent = resolve_max_concurrent()
+
+    def _worker_loop(self) -> None:
+        while True:
+            job_id, process_func = self._work_queue.get()
+            try:
+                if self.is_cancelled(job_id):
+                    continue
+                self.update_progress(job_id, 'pending', 'Starting...', 1)
+                process_func(job_id, self)
+            except Exception as exc:
+                self.fail_job(job_id, f'Worker error: {exc}')
+            finally:
+                self._work_queue.task_done()
+                self._cleanup_job(job_id)
+                self._broadcast_queue_positions()
+
+    def _restore_active_jobs(self) -> None:
         try:
             active = get_active_jobs()
             for job in active:
                 job_id = job['id']
-                # Mark stale running jobs as failed (server was restarted)
-                if job['status'] in ('downloading', 'transcribing', 'extracting', 'creating', 'uploading'):
+                status = job['status']
+                if status in (
+                    'downloading', 'transcribing', 'extracting', 'creating',
+                    'uploading', 'processing', 'awaiting_confirmation',
+                ):
                     db_fail_job(job_id, 'Server was restarted during processing. Please retry.')
-                else:
-                    self.active_jobs[job_id] = {
-                        'url': job['url'],
-                        'status': job['status'],
-                        'progress': job['progress']
-                    }
-        except Exception as e:
-            print(f"Error restoring active jobs: {e}")
-    
-    def create_new_job(self, url: str) -> str:
-        """
-        Create a new analysis job.
-        
-        Args:
-            url: Video URL to analyze
-            
-        Returns:
-            job_id: Unique identifier for the job
-        """
-        job_id = db_create_job(url)
-        
+                elif status in ('queued', 'pending'):
+                    with self._lock:
+                        self.active_jobs[job_id] = {
+                            'url': job['url'],
+                            'status': 'queued',
+                            'progress': job.get('progress', 0),
+                        }
+                        self.cancellation_flags[job_id] = threading.Event()
+                    self._work_queue.put((job_id, self._process_func))
+        except Exception as exc:
+            print(f"Error restoring active jobs: {exc}")
+
+    _process_func: Callable | None = None
+    _pending_restore: bool = True
+
+    def create_new_job(
+        self,
+        url: str,
+        *,
+        retry_from_history_id: int | None = None,
+        priority: int = 0,
+    ) -> str:
+        job_id = db_create_job(url, retry_from_history_id=retry_from_history_id, priority=priority)
         with self._lock:
             self.active_jobs[job_id] = {
                 'url': url,
-                'status': 'pending',
-                'progress': 0
+                'status': 'queued',
+                'progress': 0,
             }
             self.cancellation_flags[job_id] = threading.Event()
-        
         return job_id
-    
-    def start_job(self, job_id: str, process_func: Callable):
-        """
-        Start processing a job.
-        
-        Args:
-            job_id: Job identifier
-            process_func: Function to call for processing (receives job_id and JobManager)
-        """
-        def wrapped_process():
-            # Acquire semaphore to limit concurrent jobs
-            self.semaphore.acquire()
-            try:
-                if self.is_cancelled(job_id):
-                    return
-                process_func(job_id, self)
-            finally:
-                self.semaphore.release()
-                self._cleanup_job(job_id)
-        
-        thread = threading.Thread(target=wrapped_process, daemon=True)
-        with self._lock:
-            self.job_threads[job_id] = thread
-        thread.start()
-    
+
+    def start_job(self, job_id: str, process_func: Callable) -> None:
+        self.set_process_func(process_func)
+        position = get_queue_position(job_id)
+        msg = f'Queued — position {position}' if position > 1 else 'Queued — starting soon...'
+        self.update_progress(job_id, 'queued', msg, 0)
+        self._work_queue.put((job_id, process_func))
+        self._broadcast_queue_positions()
+
     def is_cancelled(self, job_id: str) -> bool:
-        """Check if a job has been cancelled."""
         flag = self.cancellation_flags.get(job_id)
         return flag.is_set() if flag else False
-    
+
     def cancel_job(self, job_id: str) -> bool:
-        """
-        Cancel a running job.
-        
-        Args:
-            job_id: Job identifier
-            
-        Returns:
-            True if job was cancelled, False if not found
-        """
         with self._lock:
             if job_id in self.cancellation_flags:
                 self.cancellation_flags[job_id].set()
-        
-        # Update database
         result = db_cancel_job(job_id)
-        
         if result:
-            # Emit cancellation event
             self.socketio.emit('job_cancelled', {'job_id': job_id}, room=f'job_{job_id}')
-            self.socketio.emit('job_cancelled', {'job_id': job_id})  # Broadcast too
-        
+            self.socketio.emit('job_cancelled', {'job_id': job_id})
+            self._broadcast_queue_positions()
         return result
-    
-    def update_progress(self, job_id: str, stage: str, message: str, 
-                        percent: int, video_title: Optional[str] = None):
-        """
-        Update job progress and emit via WebSocket.
-        
-        Args:
-            job_id: Job identifier
-            stage: Current processing stage
-            message: Status message
-            percent: Progress percentage (0-100)
-            video_title: Optional video title to store
-        """
-        # Check for cancellation
+
+    def update_progress(
+        self,
+        job_id: str,
+        stage: str,
+        message: str,
+        percent: int,
+        video_title: Optional[str] = None,
+    ) -> None:
         if self.is_cancelled(job_id):
             return
-        
-        # Determine status from stage
+
         status_map = {
+            'queued': 'queued',
             'pending': 'pending',
             'info': 'downloading',
             'download': 'downloading',
@@ -175,55 +177,45 @@ class JobManager:
             'upload': 'uploading',
             'complete': 'completed',
             'error': 'failed',
-            'cancelled': 'cancelled'
+            'cancelled': 'cancelled',
         }
         status = status_map.get(stage, 'processing')
-        
-        # Update database
+
         update_job_progress(job_id, status, percent, stage, message, video_title)
-        
-        # Update local cache
+
         with self._lock:
             if job_id in self.active_jobs:
                 self.active_jobs[job_id]['status'] = status
                 self.active_jobs[job_id]['progress'] = percent
                 if video_title:
                     self.active_jobs[job_id]['video_title'] = video_title
-        
-        # Emit to job-specific room
-        self.socketio.emit('job_progress', {
+
+        payload = {
             'job_id': job_id,
             'stage': stage,
             'message': message,
             'percent': percent,
-            'video_title': video_title
-        }, room=f'job_{job_id}')
-        
-        # Also broadcast to all connected clients (for the job list)
-        self.socketio.emit('job_progress', {
-            'job_id': job_id,
-            'stage': stage,
-            'message': message,
-            'percent': percent,
-            'video_title': video_title
-        })
-    
-    def complete_job(self, job_id: str, recipe_data: dict, image_path: Optional[str],
-                     output_target: str):
-        """
-        Mark a job as completed and save to history.
-        
-        Args:
-            job_id: Job identifier
-            recipe_data: The extracted recipe data
-            image_path: Path to the dish image
-            output_target: Where it was uploaded (tandoor/mealie)
-        """
+            'video_title': video_title,
+            'queue_position': get_queue_position(job_id) if status == 'queued' else 0,
+        }
+        self.socketio.emit('job_progress', payload, room=f'job_{job_id}')
+        self.socketio.emit('job_progress', payload)
+
+    def complete_job(
+        self,
+        job_id: str,
+        recipe_data: dict,
+        image_path: Optional[str],
+        output_target: str,
+        llm_tokens: int = 0,
+    ) -> None:
         job = get_job(job_id)
         if not job:
             return
-        
-        # Encode thumbnail for storage
+
+        if llm_tokens:
+            update_job_tokens(job_id, llm_tokens)
+
         thumbnail_data = None
         if image_path and os.path.exists(image_path):
             try:
@@ -231,8 +223,7 @@ class JobManager:
                     thumbnail_data = base64.b64encode(f.read()).decode('utf-8')
             except Exception:
                 pass
-        
-        # Create history entry
+
         create_history_entry(
             job_id=job_id,
             url=job['url'],
@@ -242,35 +233,26 @@ class JobManager:
             thumbnail_path=image_path,
             thumbnail_data=thumbnail_data,
             status='success',
-            output_target=output_target
+            output_target=output_target,
         )
-        
-        # Mark job as completed
         db_complete_job(job_id)
-        
-        # Emit completion event
-        self.socketio.emit('job_complete', {
+
+        payload = {
             'job_id': job_id,
-            'recipe': recipe_data
-        }, room=f'job_{job_id}')
-        self.socketio.emit('job_complete', {
-            'job_id': job_id,
-            'recipe': recipe_data
-        })
-    
-    def fail_job(self, job_id: str, error_message: str):
-        """
-        Mark a job as failed and save to history.
-        
-        Args:
-            job_id: Job identifier
-            error_message: Description of the error
-        """
+            'recipe': recipe_data,
+            'llm_tokens_used': llm_tokens,
+        }
+        self.socketio.emit('job_complete', payload, room=f'job_{job_id}')
+        self.socketio.emit('job_complete', payload)
+
+    def fail_job(self, job_id: str, error_message: str, llm_tokens: int = 0) -> None:
         job = get_job(job_id)
         if not job:
             return
-        
-        # Create history entry for failed job
+
+        if llm_tokens:
+            update_job_tokens(job_id, llm_tokens)
+
         create_history_entry(
             job_id=job_id,
             url=job['url'],
@@ -280,50 +262,54 @@ class JobManager:
             thumbnail_path=None,
             thumbnail_data=None,
             status='failed',
-            error_message=error_message
+            error_message=error_message,
         )
-        
-        # Mark job as failed
         db_fail_job(job_id, error_message)
-        
-        # Emit failure event
-        self.socketio.emit('job_failed', {
-            'job_id': job_id,
-            'error': error_message
-        }, room=f'job_{job_id}')
-        self.socketio.emit('job_failed', {
-            'job_id': job_id,
-            'error': error_message
-        })
-    
+
+        payload = {'job_id': job_id, 'error': error_message}
+        self.socketio.emit('job_failed', payload, room=f'job_{job_id}')
+        self.socketio.emit('job_failed', payload)
+
     def get_all_active_jobs(self) -> list:
-        """Get all active jobs from database."""
         return get_active_jobs()
-    
+
     def get_job_status(self, job_id: str) -> Optional[dict]:
-        """Get current status of a job."""
-        return get_job(job_id)
-    
-    def _cleanup_job(self, job_id: str):
-        """Clean up job resources after completion."""
+        job = get_job(job_id)
+        if job and job.get('status') == 'queued':
+            job = dict(job)
+            job['queue_position'] = get_queue_position(job_id)
+        return job
+
+    def get_queue_stats(self) -> dict:
+        queued = get_queued_jobs()
+        return {
+            'max_concurrent': self.max_concurrent,
+            'queued_count': len(queued),
+            'active_count': len(self.active_jobs),
+        }
+
+    def _broadcast_queue_positions(self) -> None:
+        for job in get_queued_jobs():
+            pos = get_queue_position(job['id'])
+            self.update_progress(
+                job['id'], 'queued', f'Queued — position {pos}', 0,
+                video_title=job.get('video_title'),
+            )
+
+    def _cleanup_job(self, job_id: str) -> None:
         with self._lock:
             self.job_threads.pop(job_id, None)
             self.cancellation_flags.pop(job_id, None)
-            # Keep in active_jobs for a bit so clients can see final state
-            # It will be cleaned up by periodic cleanup or on next restore
 
 
-# Singleton instance - will be initialized by app.py
 job_manager: Optional[JobManager] = None
 
 
 def init_job_manager(socketio) -> JobManager:
-    """Initialize the global job manager instance."""
     global job_manager
     job_manager = JobManager(socketio)
     return job_manager
 
 
 def get_job_manager() -> Optional[JobManager]:
-    """Get the global job manager instance."""
     return job_manager

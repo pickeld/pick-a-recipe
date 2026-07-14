@@ -8,6 +8,7 @@ import json
 import sqlite3
 import hashlib
 import uuid
+import bcrypt
 from datetime import datetime
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
@@ -110,11 +111,13 @@ def init_db():
         ''')
         
         conn.commit()
-        
+
+        _migrate_schema(conn)
+
         # Create default admin user if no users exist
         cursor.execute('SELECT COUNT(*) FROM users')
         if cursor.fetchone()[0] == 0:
-            create_user('admin', 'admin123')
+            create_user('admin', 'admin123', must_change_password=True, is_admin=True)
         
         # Initialize default config values if not exist
         cursor.execute('SELECT COUNT(*) FROM config')
@@ -133,26 +136,174 @@ def init_db():
         conn.commit()
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply incremental schema migrations for existing databases."""
+    cursor = conn.cursor()
+
+    user_columns = {
+        'email': 'TEXT',
+        'google_id': 'TEXT',
+        'auth_provider': "TEXT DEFAULT 'local'",
+        'must_change_password': 'INTEGER DEFAULT 0',
+        'is_admin': 'INTEGER DEFAULT 0',
+        'avatar_url': 'TEXT',
+    }
+    for col, typedef in user_columns.items():
+        try:
+            cursor.execute(f'ALTER TABLE users ADD COLUMN {col} {typedef}')
+        except sqlite3.OperationalError:
+            pass
+
+    job_columns = {
+        'retry_from_history_id': 'INTEGER',
+        'llm_tokens_used': 'INTEGER DEFAULT 0',
+        'queue_priority': 'INTEGER DEFAULT 0',
+    }
+    for col, typedef in job_columns.items():
+        try:
+            cursor.execute(f'ALTER TABLE recipe_jobs ADD COLUMN {col} {typedef}')
+        except sqlite3.OperationalError:
+            pass
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    conn.commit()
+
+    cursor.execute("UPDATE users SET is_admin = 1 WHERE username = 'admin' AND is_admin = 0")
+    conn.commit()
+
+
 def hash_password(password: str) -> str:
-    """Hash a password using SHA-256."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash a password using bcrypt."""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+
+def _verify_password_hash(stored_hash: str, password: str) -> bool:
+    """Verify password against bcrypt or legacy SHA-256 hash."""
+    if stored_hash.startswith('$2'):
+        return bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8'))
+    return stored_hash == hashlib.sha256(password.encode()).hexdigest()
+
+
+def _upgrade_password_hash(username: str, password: str) -> None:
+    """Upgrade legacy SHA-256 hash to bcrypt on successful login."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE users SET password_hash = ? WHERE username = ?',
+            (hash_password(password), username),
+        )
+        conn.commit()
 
 
 # ===== User Functions =====
 
-def create_user(username: str, password: str) -> bool:
+def create_user(
+    username: str,
+    password: str | None = None,
+    *,
+    email: str | None = None,
+    google_id: str | None = None,
+    auth_provider: str = 'local',
+    must_change_password: bool = False,
+    is_admin: bool = False,
+    avatar_url: str | None = None,
+) -> bool:
     """Create a new user."""
+    pw_hash = hash_password(password) if password else ''
     try:
         with get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                'INSERT INTO users (username, password_hash) VALUES (?, ?)',
-                (username, hash_password(password))
+                '''INSERT INTO users
+                   (username, password_hash, email, google_id, auth_provider,
+                    must_change_password, is_admin, avatar_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (username, pw_hash, email, google_id, auth_provider,
+                 int(must_change_password), int(is_admin), avatar_url),
             )
             conn.commit()
             return True
     except sqlite3.IntegrityError:
         return False
+
+
+def get_user(username: str) -> Optional[Dict[str, Any]]:
+    """Get user record by username."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE email = ?', (email,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_google_id(google_id: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE google_id = ?', (google_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def list_users() -> List[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT id, username, email, auth_provider, is_admin, created_at FROM users ORDER BY username'
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def delete_user(username: str) -> bool:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM users WHERE username = ?', (username,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def user_must_change_password(username: str) -> bool:
+    user = get_user(username)
+    return bool(user and user.get('must_change_password'))
+
+
+def clear_must_change_password(username: str) -> None:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE users SET must_change_password = 0 WHERE username = ?',
+            (username,),
+        )
+        conn.commit()
+
+
+def link_google_account(username: str, google_id: str, email: str, avatar_url: str | None = None) -> bool:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''UPDATE users SET google_id = ?, email = ?, auth_provider = 'google',
+               avatar_url = COALESCE(?, avatar_url) WHERE username = ?''',
+            (google_id, email, avatar_url, username),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def verify_user(username: str, password: str) -> bool:
@@ -164,7 +315,9 @@ def verify_user(username: str, password: str) -> bool:
             (username,)
         )
         row = cursor.fetchone()
-        if row and row['password_hash'] == hash_password(password):
+        if row and row['password_hash'] and _verify_password_hash(row['password_hash'], password):
+            if not row['password_hash'].startswith('$2'):
+                _upgrade_password_hash(username, password)
             return True
         return False
 
@@ -221,17 +374,65 @@ def save_config(config: dict) -> bool:
 
 # ===== Job Functions =====
 
-def create_job(url: str) -> str:
+def create_job(url: str, *, retry_from_history_id: int | None = None, priority: int = 0) -> str:
     """Create a new analysis job and return its ID."""
     job_id = str(uuid.uuid4())
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO recipe_jobs (id, url, status, progress, current_stage, stage_message)
-            VALUES (?, ?, 'pending', 0, 'pending', 'Waiting to start...')
-        ''', (job_id, url))
+            INSERT INTO recipe_jobs
+            (id, url, status, progress, current_stage, stage_message,
+             retry_from_history_id, queue_priority)
+            VALUES (?, ?, 'queued', 0, 'queued', 'Waiting in queue...', ?, ?)
+        ''', (job_id, url, retry_from_history_id, priority))
         conn.commit()
     return job_id
+
+
+def get_queue_position(job_id: str) -> int:
+    """Return 1-based queue position (0 if processing or not queued)."""
+    job = get_job(job_id)
+    if not job or job.get('status') != 'queued':
+        return 0
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) FROM recipe_jobs q
+            WHERE q.status = 'queued'
+            AND (
+                q.queue_priority > ?
+                OR (q.queue_priority = ? AND q.rowid < (SELECT rowid FROM recipe_jobs WHERE id = ?))
+            )
+        ''', (job.get('queue_priority', 0), job.get('queue_priority', 0), job_id))
+        ahead = cursor.fetchone()[0]
+        return ahead + 1
+
+
+def count_queued_jobs() -> int:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM recipe_jobs WHERE status = 'queued'")
+        return cursor.fetchone()[0]
+
+
+def get_queued_jobs() -> List[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM recipe_jobs WHERE status = 'queued'
+            ORDER BY queue_priority DESC, created_at ASC
+        ''')
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def update_job_tokens(job_id: str, tokens: int) -> None:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE recipe_jobs SET llm_tokens_used = ? WHERE id = ?',
+            (tokens, job_id),
+        )
+        conn.commit()
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
@@ -252,9 +453,16 @@ def get_active_jobs() -> List[Dict[str, Any]]:
         cursor.execute('''
             SELECT * FROM recipe_jobs
             WHERE status NOT IN ('completed', 'failed', 'cancelled')
-            ORDER BY created_at DESC
+            ORDER BY
+                CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
+                queue_priority DESC,
+                created_at ASC
         ''')
-        return [dict(row) for row in cursor.fetchall()]
+        jobs = [dict(row) for row in cursor.fetchall()]
+        for job in jobs:
+            if job.get('status') == 'queued':
+                job['queue_position'] = get_queue_position(job['id'])
+        return jobs
 
 
 def get_all_jobs() -> List[Dict[str, Any]]:
@@ -542,9 +750,9 @@ def get_combined_history_and_jobs(limit: int = 50, offset: int = 0,
                 jobs_query += ' AND rj.status = ?'
                 jobs_params.append('cancelled')
             elif status_filter == 'pending':
-                history_query += ' AND 1=0'  # No history entries for pending
-                jobs_query += ' AND rj.status = ?'
-                jobs_params.append('pending')
+                history_query += ' AND 1=0'
+                jobs_query += ' AND rj.status IN (?, ?)'
+                jobs_params.extend(['pending', 'queued'])
             elif status_filter == 'processing':
                 history_query += ' AND 1=0'  # No history entries for processing
                 jobs_query += ' AND rj.status NOT IN (?, ?, ?, ?)'
@@ -639,10 +847,10 @@ def get_combined_history_and_jobs_count(status_filter: Optional[str] = None,
                 jobs_query += ' AND rj.status = ?'
                 jobs_params.append('cancelled')
             elif status_filter == 'pending':
-                history_query = 'SELECT 0'  # No history entries for pending
+                history_query = 'SELECT 0'
                 history_params = []
-                jobs_query += ' AND rj.status = ?'
-                jobs_params.append('pending')
+                jobs_query += ' AND rj.status IN (?, ?)'
+                jobs_params.extend(['pending', 'queued'])
             elif status_filter == 'processing':
                 history_query = 'SELECT 0'  # No history entries for processing
                 history_params = []
@@ -835,6 +1043,42 @@ def cleanup_expired_pending_uploads() -> int:
         ''')
         conn.commit()
         return cursor.rowcount
+
+
+def save_push_subscription(username: str, endpoint: str, p256dh: str, auth_key: str) -> bool:
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO push_subscriptions (username, endpoint, p256dh, auth)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(endpoint) DO UPDATE SET
+                    username = excluded.username,
+                    p256dh = excluded.p256dh,
+                    auth = excluded.auth
+            ''', (username, endpoint, p256dh, auth_key))
+            conn.commit()
+            return True
+    except sqlite3.Error:
+        return False
+
+
+def get_push_subscriptions(username: str) -> List[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE username = ?',
+            (username,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def delete_push_subscription(endpoint: str) -> bool:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM push_subscriptions WHERE endpoint = ?', (endpoint,))
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 # Initialize database on module import

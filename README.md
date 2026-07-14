@@ -248,6 +248,10 @@ docker pull pickeld/pick-a-recipe:v1.0.0
 | `PORT` | Port to listen on | `5006` |
 | `FLASK_SECRET_KEY` | Secret key for session cookies | Auto-generated |
 | `FLASK_DEBUG` | Enable debug mode | `false` |
+| `MAX_CONCURRENT_JOBS` | Parallel extraction workers (1–16) | `3` (or Settings value) |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID (enables SSO) | — |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | — |
+| `SESSION_COOKIE_SECURE` | Set secure cookie flag (use with HTTPS) | `false` |
 
 ### Docker Compose (Using Docker Hub)
 

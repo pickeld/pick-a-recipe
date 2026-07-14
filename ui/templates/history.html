@@ -573,8 +573,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 retryBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     const fullUrl = item.dataset.url;
+                    const historyId = item.dataset.historyId || null;
                     if (fullUrl) {
-                        retryAnalysis(fullUrl);
+                        retryAnalysis(fullUrl, historyId);
                     }
                 });
             }
@@ -817,9 +818,22 @@ document.addEventListener('DOMContentLoaded', function() {
     /**
      * Retry failed analysis
      */
-    function retryAnalysis(url) {
-        // Redirect to home page with the URL
-        window.location.href = '/?url=' + encodeURIComponent(url);
+    function retryAnalysis(url, historyId) {
+        fetch('/api/jobs/retry', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: url, history_id: historyId }),
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                showNotification(data.error, 'error');
+                return;
+            }
+            showNotification('Retry started!', 'success');
+            window.location.href = '/jobs/' + data.job_id;
+        })
+        .catch(() => showNotification('Failed to start retry', 'error'));
     }
     
     /**

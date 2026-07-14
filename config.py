@@ -91,7 +91,9 @@ DEFAULT_CONFIG = {
     "confirm_before_upload": "true",
     "hf_token": "",
     "yt_dlp_cookies_file": "",
-    "yt_dlp_cookies_browser": ""
+    "yt_dlp_cookies_browser": "",
+    "max_concurrent_jobs": "3",
+    "allow_registration": "true",
 }
 
 
@@ -242,6 +244,19 @@ class Config:
     @property
     def YT_DLP_COOKIES_BROWSER(self) -> str:
         return self._get('yt_dlp_cookies_browser', DEFAULT_CONFIG['yt_dlp_cookies_browser'])
+
+    @property
+    def MAX_CONCURRENT_JOBS(self) -> int:
+        raw = self._get('max_concurrent_jobs', DEFAULT_CONFIG['max_concurrent_jobs'])
+        try:
+            return max(1, min(16, int(raw)))
+        except (TypeError, ValueError):
+            return 3
+
+    @property
+    def ALLOW_REGISTRATION(self) -> bool:
+        value = self._get('allow_registration', DEFAULT_CONFIG['allow_registration'])
+        return value.lower() in ('true', '1', 'yes', 'on')
 
     def reload(self):
         """Reload configuration from database."""

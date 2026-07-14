@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Job Progress - Pick-a-Recipe{% endblock %}
+
+{% block content %}
+<div class="main-container">
+    <div class="header">
+        <h1><i class="fas fa-tasks"></i> Job Progress</h1>
+        <p id="job-url-display">{{ job.url }}</p>
+    </div>
+
+    <div class="jobs-section" id="jobs-section">
+        <div class="jobs-list" id="jobs-list"></div>
+    </div>
+
+    <div class="job-actions" style="margin-top: 1.5rem; display: flex; gap: 1rem;">
+        <a href="{{ url_for('index') }}" class="btn btn-secondary"><i class="fas fa-home"></i> Home</a>
+        <a href="{{ url_for('history') }}" class="btn btn-secondary"><i class="fas fa-history"></i> History</a>
+    </div>
+</div>
+
+<!-- Job Card Template -->
+<template id="job-card-template">
+    <div class="job-card" data-job-id="">
+        <div class="job-header">
+            <div class="job-info">
+                <h3 class="job-title">Processing video...</h3>
+                <p class="job-url"></p>
+            </div>
+            <button class="btn btn-icon cancel-job-btn" title="Cancel">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="job-progress">
+            <div class="progress-bar-container">
+                <div class="progress-bar" style="width: 0%"></div>
+                <span class="progress-text">0%</span>
+            </div>
+        </div>
+        <div class="job-steps">
+            <div class="job-step" data-stage="info"><i class="fas fa-info-circle"></i></div>
+            <div class="job-step" data-stage="download"><i class="fas fa-download"></i></div>
+            <div class="job-step" data-stage="transcribe"><i class="fas fa-microphone"></i></div>
+            <div class="job-step" data-stage="visual"><i class="fas fa-eye"></i></div>
+            <div class="job-step" data-stage="image"><i class="fas fa-image"></i></div>
+            <div class="job-step" data-stage="evaluate"><i class="fas fa-robot"></i></div>
+            <div class="job-step" data-stage="upload"><i class="fas fa-cloud-upload-alt"></i></div>
+        </div>
+        <div class="job-message"><span class="message-text">Waiting to start...</span></div>
+    </div>
+</template>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    window.JOB_PAGE_CONFIG = {
+        jobId: {{ job.id | tojson }},
+        jobUrl: {{ job.url | tojson }},
+        maxConcurrent: {{ max_concurrent }},
+    };
+</script>
+<script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
+<script src="{{ url_for('static', filename='js/job-page.js') }}"></script>
+{% endblock %}

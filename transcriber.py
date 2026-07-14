@@ -143,13 +143,8 @@ class Transcriber:
 
     def _load_model(self):
         if self.model is None:
-            # Set HF_TOKEN for authenticated HuggingFace Hub requests
-            if config.HF_TOKEN:
-                os.environ["HF_TOKEN"] = config.HF_TOKEN
-                logger.info("HF_TOKEN set in environment for HuggingFace Hub requests.")
-            else:
-                logger.warning("HF_TOKEN not configured. Some models may not be accessible.")
-            self.model = WhisperModel(
+            from whisper_pool import get_whisper_model
+            self.model = get_whisper_model(
                 self.model_size, device=self.device, compute_type=self.compute_type)
 
     def _get_audio_duration(self) -> float:
