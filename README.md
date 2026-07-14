@@ -94,7 +94,7 @@ Access the web UI at `http://localhost:5006`
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/pick-a-recipe.git
+   git clone https://github.com/pickeld/pick-a-recipe.git
    cd pick-a-recipe
    ```
 
@@ -215,6 +215,14 @@ pick-a-recipe/
 │   └── static/          # CSS and JavaScript
 ├── Dockerfile
 ├── docker-compose.yml
+├── docker-compose.srv2.yml   # srv2 reference (see portainer/ for production)
+├── build-and-push.sh         # Publish pickeld/pick-a-recipe to Docker Hub
+├── portainer/
+│   ├── stack.yml             # Portainer / srv2 production stack
+│   └── stack.env             # Stack env template (copy to stack.env.local)
+├── scripts/
+│   ├── portainer-migrate.sh  # srv2 deploy: pull image + restart stack
+│   └── portainer-deploy.sh   # Deploy via Portainer API
 └── requirements.txt
 ```
 
@@ -263,6 +271,39 @@ services:
 volumes:
   pick-a-recipe-data:
 ```
+
+### Building and Publishing to Docker Hub
+
+Multi-arch image (`linux/amd64`, `linux/arm64`):
+
+```bash
+docker logout && docker login -u pickeld   # or pickeld@gmail.com
+./build-and-push.sh latest
+```
+
+Published as [`pickeld/pick-a-recipe`](https://hub.docker.com/r/pickeld/pick-a-recipe) on Docker Hub.
+
+### srv2 / Portainer deployment
+
+Production on srv2 is managed by **Portainer**. Add credentials to `portainer/stack.env.local`, then deploy:
+
+```bash
+cd /opt/pick-a-recipe
+cp portainer/stack.env portainer/stack.env.local
+# Edit stack.env.local: FLASK_SECRET_KEY, PORTAINER_URL, PORTAINER_USER, PORTAINER_PASSWORD
+
+./scripts/portainer-migrate.sh
+```
+
+Or deploy/update directly:
+
+```bash
+./scripts/portainer-deploy.sh --pull --force-recreate
+```
+
+> **Important:** Do not use `docker compose up` directly — Portainer will show *"created outside of Portainer"* and limit control. Always deploy via the scripts above or the Portainer UI.
+
+> **Note:** Existing srv2 installs may still use the legacy Docker volume `social_recipe_social-recipes` for data; the stack preserves it automatically.
 
 ### Building from Source
 

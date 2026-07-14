@@ -4,6 +4,7 @@ Reads configuration from SQLite database with defaults for first run.
 """
 
 import os
+import shutil
 import sqlite3
 from contextlib import contextmanager
 
@@ -11,6 +12,65 @@ from contextlib import contextmanager
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_FILE = os.path.join(DATA_DIR, 'pick-a-recipe.db')
+
+# Legacy filenames from social_recipes / pick_a_recipe deployments on srv2
+LEGACY_DB_FILES = ('pick_a_recipe.db', 'social_recipes.db')
+
+
+def _db_activity_score(db_path: str) -> int:
+    """Heuristic: prefer the DB with the most user data."""
+    if not os.path.exists(db_path):
+        return 0
+    score = 0
+    try:
+        conn = sqlite3.connect(db_path)
+        for table, weight in (
+            ('recipe_history', 10),
+            ('recipe_jobs', 1),
+            ('pending_uploads', 5),
+            ('config', 1),
+        ):
+            try:
+                count = conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                score += count * weight
+            except sqlite3.OperationalError:
+                pass
+        conn.close()
+    except sqlite3.Error:
+        return 0
+    return score
+
+
+def migrate_legacy_database() -> bool:
+    """Copy the richest legacy SQLite file into the canonical pick-a-recipe.db.
+
+    srv2 kept volume social_recipe_social-recipes across renames; the old stack
+    wrote pick_a_recipe.db while the new app expects pick-a-recipe.db.
+    """
+    canonical_score = _db_activity_score(DB_FILE)
+    best_legacy = None
+    best_score = canonical_score
+
+    for name in LEGACY_DB_FILES:
+        path = os.path.join(DATA_DIR, name)
+        score = _db_activity_score(path)
+        if score > best_score:
+            best_legacy = path
+            best_score = score
+
+    if not best_legacy:
+        return False
+
+    if os.path.exists(DB_FILE):
+        backup = f'{DB_FILE}.pre-migration.bak'
+        if not os.path.exists(backup):
+            shutil.copy2(DB_FILE, backup)
+
+    shutil.copy2(best_legacy, DB_FILE)
+    return True
+
+
+migrate_legacy_database()
 
 # Default configuration values
 DEFAULT_CONFIG = {

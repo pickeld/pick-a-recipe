@@ -160,5 +160,11 @@ tmp/
 # Pick-a-Recipe database
 pick-a-recipe.db
 
+# Portainer local secrets
+portainer/stack.env.local
+
+# Bundled jq binary (auto-downloaded by portainer-deploy.sh)
+scripts/jq
+
 # Flask secret key (auto-generated for session persistence)
 .flask_secret_key

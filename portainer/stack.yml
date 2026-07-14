@@ -1,0 +1,28 @@
+# =============================================================================
+# Pick-a-Recipe — Portainer Stack (srv2 production)
+# =============================================================================
+# Deploy via: scripts/portainer-deploy.sh
+#
+# Uses pickeld/pick-a-recipe:latest from Docker Hub.
+# Data volume `social_recipe_social-recipes` is the legacy name kept for srv2 upgrades.
+# =============================================================================
+
+services:
+  pick-a-recipe:
+    image: pickeld/pick-a-recipe:latest
+    container_name: pick-a-recipe
+    restart: unless-stopped
+    ports:
+      - "5006:5006"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 5006
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+    volumes:
+      - pick-a-recipe-data:/app/data
+      - pick-a-recipe-data:/tmp
+
+volumes:
+  pick-a-recipe-data:
+    external: true
+    name: social_recipe_social-recipes

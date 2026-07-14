@@ -46,6 +46,14 @@ pick-a-recipe/
 │   └── static/          # CSS, JS, and PWA assets
 ├── Dockerfile           # Container configuration
 ├── docker-compose.yml   # Docker Compose setup
+├── docker-compose.srv2.yml
+├── build-and-push.sh    # Publish pickeld/pick-a-recipe to Docker Hub
+├── portainer/
+│   ├── stack.yml        # srv2 / Portainer production stack
+│   └── stack.env
+├── scripts/
+│   ├── portainer-migrate.sh
+│   └── portainer-deploy.sh
 └── requirements.txt     # Python dependencies
 ```
 
@@ -194,8 +202,11 @@ python main.py "https://www.tiktok.com/@user/video/123"
 - Caching reduces costs during development iterations
 
 ### Deployment
-- Docker Hub images available as `pickeld/pick-a-recipe`
-- Volume mounts preserve data and configuration
+- Docker Hub image: [`pickeld/pick-a-recipe`](https://hub.docker.com/r/pickeld/pick-a-recipe)
+- Publish updates: `./build-and-push.sh latest` (requires `docker login -u pickeld`)
+- srv2 production: `./scripts/portainer-migrate.sh` (pulls `pickeld/pick-a-recipe:latest`)
+- Portainer API deploy: `./scripts/portainer-deploy.sh --pull`
+- Volume mounts preserve data and configuration (`pick-a-recipe-data` or legacy `social_recipe_social-recipes` on srv2)
 - Environment variable overrides for deployment flexibility
 
 This codebase represents a well-structured, production-ready application with clear separation of concerns, comprehensive error handling, and thoughtful user experience design.
