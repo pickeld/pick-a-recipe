@@ -19,10 +19,10 @@
 set -e
 
 # Configuration
-DOCKER_REPO="pickeld/social_recipes"
+DOCKER_REPO="pickeld/pick-a-recipe"
 DEFAULT_TAG="latest"
 PLATFORMS="linux/amd64,linux/arm64"
-BUILDER_NAME="social-recipes-builder"
+BUILDER_NAME="pick-a-recipe-builder"
 
 # Get tag from argument or use default
 TAG="${1:-$DEFAULT_TAG}"

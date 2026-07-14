@@ -6,6 +6,7 @@ from faster_whisper import WhisperModel
 
 from config import config
 from helpers import setup_logger
+from llm_resilience import call_with_model_fallback
 
 logger = setup_logger(__name__)
 
@@ -200,22 +201,24 @@ class Transcriber:
 
         prompt = self._get_visual_text_prompt()
 
-        response = client.models.generate_content(
-            model=config.GEMINI_MODEL,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_uri(
-                            file_uri=video_file.uri or "",
-                            mime_type=video_file.mime_type or "video/mp4"
-                        ),
-                        types.Part.from_text(text=prompt),
-                    ],
-                ),
-            ],
-        )
+        def _call(model: str):
+            return client.models.generate_content(
+                model=model,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_uri(
+                                file_uri=video_file.uri or "",
+                                mime_type=video_file.mime_type or "video/mp4"
+                            ),
+                            types.Part.from_text(text=prompt),
+                        ],
+                    ),
+                ],
+            )
 
+        response, _ = call_with_model_fallback("gemini", config.GEMINI_MODEL, _call)
         return response.text or ""
 
     def _extract_visual_text_openai(self) -> str:
@@ -245,19 +248,21 @@ class Transcriber:
 
         prompt = self._get_visual_text_prompt()
 
-        response = client.responses.create(
-            model=config.OPENAI_MODEL,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        *image_contents
-                    ]
-                }
-            ]
-        )
+        def _call(model: str):
+            return client.responses.create(
+                model=model,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            *image_contents
+                        ]
+                    }
+                ]
+            )
 
+        response, _ = call_with_model_fallback("openai", config.OPENAI_MODEL, _call)
         return response.output_text or ""
 
     def _extract_frames(self, num_frames: int = 8) -> list[str]:

@@ -1,11 +1,11 @@
 version: "3.8"
 
 services:
-  social-recipes:
-    image: pickeld/social_recipes:latest
+  pick-a-recipe:
+    image: pickeld/pick-a-recipe:latest
     # Uncomment to build from source instead:
     # build: .
-    container_name: social-recipes
+    container_name: pick-a-recipe
     restart: unless-stopped
     ports:
       - "5006:5006"
@@ -14,8 +14,8 @@ services:
       - PORT=5006
       - FLASK_SECRET_KEY=change-me-to-a-random-secret-key
     volumes:
-      - social-recipes:/app/data
-      - social-recipes:/tmp
+      - pick-a-recipe:/app/data
+      - pick-a-recipe:/tmp
 
 volumes:
-  social-recipes:
+  pick-a-recipe:

@@ -1,7 +1,7 @@
 {
-  "id": "social-recipes-pwa",
-  "name": "Social Recipes",
-  "short_name": "Recipes",
+  "id": "pick-a-recipe-pwa",
+  "name": "Pick-a-Recipe",
+  "short_name": "Pick-a-Recipe",
   "description": "Extract and save recipes from social media videos",
   "start_url": "/?source=pwa",
   "scope": "/",

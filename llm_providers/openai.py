@@ -7,6 +7,7 @@ import base64
 from .base import LLMImageSelector
 from config import config
 from helpers import setup_logger
+from llm_resilience import call_with_model_fallback
 
 logger = setup_logger(__name__)
 
@@ -48,11 +49,14 @@ class OpenAIImageSelector(LLMImageSelector):
         prompt = self._get_selection_prompt(len(frame_paths))
         image_contents.append({"type": "text", "text": prompt})
 
-        try:
-            response = client.responses.create(
-                model=config.OPENAI_MODEL,
+        def _call(model: str):
+            return client.responses.create(
+                model=model,
                 input=[{"role": "user", "content": image_contents}]
             )
+
+        try:
+            response, _ = call_with_model_fallback("openai", config.OPENAI_MODEL, _call)
             return self._parse_selection_response(response.output_text or "", len(frame_paths))
         except Exception as e:
             logger.error(f"Selection error: {e}")

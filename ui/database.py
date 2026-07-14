@@ -1,5 +1,5 @@
 """
-Database module for Social Recipes UI
+Database module for Pick-a-Recipe UI
 Uses SQLite to store configuration, user data, jobs, and recipe history.
 """
 
@@ -18,7 +18,7 @@ from config import DEFAULT_CONFIG
 # Database file path - use /app/data for Docker persistence, fallback to local
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
-DB_FILE = os.path.join(DATA_DIR, 'social_recipes.db')
+from config import DB_FILE
 
 
 @contextmanager
@@ -121,6 +121,16 @@ def init_db():
         if cursor.fetchone()[0] == 0:
             for key, value in DEFAULT_CONFIG.items():
                 set_config_value(key, value)
+
+        # Migrate retired Gemini model ids in existing databases.
+        # gemini-2.0-flash(-lite) were removed from the API and return 404,
+        # so rewrite them to the current default.
+        cursor.execute(
+            "UPDATE config SET value = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE key = 'gemini_model' AND value IN ('gemini-2.0-flash', 'gemini-2.0-flash-lite')",
+            (DEFAULT_CONFIG['gemini_model'],)
+        )
+        conn.commit()
 
 
 def hash_password(password: str) -> str:

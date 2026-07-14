@@ -1,8 +1,8 @@
-# Social Recipes - Codebase Analysis
+# Pick-a-Recipe - Codebase Analysis
 
 ## Overview
 
-Social Recipes is a Python-based application that extracts recipes from social media videos (TikTok, YouTube, Instagram, etc.) and uploads them to self-hosted recipe managers like Tandoor and Mealie. The application uses AI for transcription, visual text extraction, and recipe generation.
+Pick-a-Recipe is a Python-based application that extracts recipes from social media videos (TikTok, YouTube, Instagram, etc.) and uploads them to self-hosted recipe managers like Tandoor and Mealie. The application uses AI for transcription, visual text extraction, and recipe generation.
 
 ## Tech Stack
 
@@ -23,7 +23,7 @@ Social Recipes is a Python-based application that extracts recipes from social m
 ## Project Structure
 
 ```
-social_recipes/
+pick-a-recipe/
 ├── main.py              # CLI entry point
 ├── chef.py              # AI recipe generation core
 ├── config.py            # Configuration management (SQLite-based)
@@ -101,11 +101,11 @@ social_recipes/
 **Quick Start:**
 ```bash
 docker run -d \
-  --name social-recipes \
+  --name pick-a-recipe \
   -p 5006:5006 \
   -e FLASK_SECRET_KEY="your-secure-secret-key" \
-  -v social-recipes-data:/app/data \
-  pickeld/social_recipes:latest
+  -v pick-a-recipe-data:/app/data \
+  pickeld/pick-a-recipe:latest
 ```
 
 **Docker Compose:**
@@ -126,8 +126,8 @@ brew install ffmpeg          # macOS
 **Setup:**
 ```bash
 # Clone and setup
-git clone https://github.com/pickeld/social_recipes.git
-cd social_recipes
+git clone https://github.com/pickeld/pick-a-recipe.git
+cd pick-a-recipe
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -146,7 +146,7 @@ python main.py "https://www.tiktok.com/@user/video/123"
 ## Configuration
 
 ### Database-Driven Config
-- All settings stored in SQLite database (`data/social_recipes.db`)
+- All settings stored in SQLite database (`data/pick-a-recipe.db`)
 - Web UI provides settings page for configuration
 - Fallback to sensible defaults if database unavailable
 
@@ -194,7 +194,7 @@ python main.py "https://www.tiktok.com/@user/video/123"
 - Caching reduces costs during development iterations
 
 ### Deployment
-- Docker Hub images available as `pickeld/social_recipes`
+- Docker Hub images available as `pickeld/pick-a-recipe`
 - Volume mounts preserve data and configuration
 - Environment variable overrides for deployment flexibility
 

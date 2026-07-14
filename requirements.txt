@@ -1,4 +1,4 @@
-yt_dlp
+yt-dlp[curl-cffi]
 faster_whisper
 openai
 python-dotenv
