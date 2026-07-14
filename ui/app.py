@@ -1,5 +1,5 @@
 """
-Social Recipes Web UI
+Pick-a-Recipe Web UI
 A Flask-based web interface for video recipe extraction with authentication and configuration management.
 Supports parallel job processing with progress persistence.
 """

@@ -1,5 +1,5 @@
 """
-Configuration module for Social Recipes.
+Configuration module for Pick-a-Recipe.
 Reads configuration from SQLite database with defaults for first run.
 """
 
@@ -10,7 +10,7 @@ from contextlib import contextmanager
 # Database file path - must match ui/database.py location
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
-DB_FILE = os.path.join(DATA_DIR, 'social_recipes.db')
+DB_FILE = os.path.join(DATA_DIR, 'pick-a-recipe.db')
 
 # Default configuration values
 DEFAULT_CONFIG = {

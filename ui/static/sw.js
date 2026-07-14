@@ -1,6 +1,6 @@
-const CACHE_NAME = 'social-recipes-v5';
-const STATIC_CACHE_NAME = 'social-recipes-static-v5';
-const CDN_CACHE_NAME = 'social-recipes-cdn-v5';
+const CACHE_NAME = 'pick-a-recipe-v6';
+const STATIC_CACHE_NAME = 'pick-a-recipe-static-v6';
+const CDN_CACHE_NAME = 'pick-a-recipe-cdn-v6';
 
 // Static assets to cache on install
 const STATIC_ASSETS = [

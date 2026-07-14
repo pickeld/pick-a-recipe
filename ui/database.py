@@ -1,5 +1,5 @@
 """
-Database module for Social Recipes UI
+Database module for Pick-a-Recipe UI
 Uses SQLite to store configuration, user data, jobs, and recipe history.
 """
 
@@ -18,7 +18,7 @@ from config import DEFAULT_CONFIG
 # Database file path - use /app/data for Docker persistence, fallback to local
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
-DB_FILE = os.path.join(DATA_DIR, 'social_recipes.db')
+from config import DB_FILE
 
 
 @contextmanager

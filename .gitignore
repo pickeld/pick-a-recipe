@@ -157,8 +157,8 @@ output/
 temp/
 tmp/
 
-# Social Recipes database
-social_recipes.db
+# Pick-a-Recipe database
+pick-a-recipe.db
 
 # Flask secret key (auto-generated for session persistence)
 .flask_secret_key

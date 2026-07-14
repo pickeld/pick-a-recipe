@@ -1,5 +1,5 @@
 """
-Job Manager for Social Recipes
+Job Manager for Pick-a-Recipe
 Manages concurrent recipe analysis jobs with progress tracking and persistence.
 """
 

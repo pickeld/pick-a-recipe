@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="ui/static/icons/icon-192x192.png" alt="Social Recipes" width="120" height="120">
+  <img src="ui/static/icons/icon-192x192.png" alt="Pick-a-Recipe" width="120" height="120">
 </p>
 
-# Social Recipes
+# Pick-a-Recipe
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
-[![Docker Hub](https://img.shields.io/docker/v/pickeld/social_recipes?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/pickeld/social_recipes)
-[![Docker Pulls](https://img.shields.io/docker/pulls/pickeld/social_recipes?logo=docker)](https://hub.docker.com/r/pickeld/social_recipes)
+[![Docker Hub](https://img.shields.io/docker/v/pickeld/pick-a-recipe?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/pickeld/pick-a-recipe)
+[![Docker Pulls](https://img.shields.io/docker/pulls/pickeld/pick-a-recipe?logo=docker)](https://hub.docker.com/r/pickeld/pick-a-recipe)
 [![Flask](https://img.shields.io/badge/Flask-Web_UI-green.svg)](https://flask.palletsprojects.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -14,7 +14,7 @@ Extract recipes from social media videos (TikTok, YouTube, Instagram, etc.) and 
 
 ## Overview
 
-Social Recipes is a Python application that:
+Pick-a-Recipe is a Python application that:
 
 1. **Downloads videos** from TikTok, YouTube, Instagram, and other platforms using `yt-dlp`
 2. **Transcribes audio** using Whisper AI (via `faster-whisper`)
@@ -50,11 +50,11 @@ Social Recipes is a Python application that:
 
 ```bash
 docker run -d \
-  --name social-recipes \
+  --name pick-a-recipe \
   -p 5006:5006 \
   -e FLASK_SECRET_KEY="your-secure-secret-key" \
-  -v social-recipes-data:/app/data \
-  pickeld/social_recipes:latest
+  -v pick-a-recipe-data:/app/data \
+  pickeld/pick-a-recipe:latest
 ```
 
 Access the web UI at `http://localhost:5006`
@@ -67,19 +67,19 @@ Create a `docker-compose.yml` file:
 version: "3.8"
 
 services:
-  social-recipes:
-    image: pickeld/social_recipes:latest
-    container_name: social-recipes
+  pick-a-recipe:
+    image: pickeld/pick-a-recipe:latest
+    container_name: pick-a-recipe
     restart: unless-stopped
     ports:
       - "5006:5006"
     environment:
       - FLASK_SECRET_KEY=your-secure-secret-key
     volumes:
-      - social-recipes-data:/app/data
+      - pick-a-recipe-data:/app/data
 
 volumes:
-  social-recipes-data:
+  pick-a-recipe-data:
 ```
 
 Then run:
@@ -94,8 +94,8 @@ Access the web UI at `http://localhost:5006`
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/social_recipes.git
-   cd social_recipes
+   git clone https://github.com/yourusername/pick-a-recipe.git
+   cd pick-a-recipe
    ```
 
 2. Install system dependencies:
@@ -163,18 +163,18 @@ All configuration is managed through the web UI settings page (`/settings`). On 
 
 ### PWA / Mobile App (Share Links Directly)
 
-Social Recipes supports PWA (Progressive Web App) installation, allowing you to share video links directly from your phone:
+Pick-a-Recipe supports PWA (Progressive Web App) installation, allowing you to share video links directly from your phone:
 
 #### Android
 1. Open `https://your-server:5006` in Chrome
 2. Tap the menu (⋮) → "Add to Home screen"
-3. Now when sharing any video link, choose "Social Recipes" from the share sheet
+3. Now when sharing any video link, choose "Pick-a-Recipe" from the share sheet
 
 #### iPhone / iPad
 1. Open `https://your-server:5006` in Safari
 2. Tap the Share button → "Add to Home Screen"
 3. Open the app from your home screen
-4. Share video links from TikTok/Instagram/YouTube using the Share button → "Social Recipes"
+4. Share video links from TikTok/Instagram/YouTube using the Share button → "Pick-a-Recipe"
 
 > **Note:** PWA features require HTTPS in production. For local testing, `localhost` works without HTTPS.
 
@@ -193,7 +193,7 @@ python main.py --no-upload "https://www.youtube.com/watch?v=VIDEO_ID"
 ## Project Structure
 
 ```
-social_recipes/
+pick-a-recipe/
 ├── main.py              # CLI entry point
 ├── chef.py              # AI recipe generation
 ├── config.py            # Configuration management
@@ -222,14 +222,14 @@ social_recipes/
 
 ### Docker Hub Image
 
-The official image is available on Docker Hub: [`pickeld/social_recipes`](https://hub.docker.com/r/pickeld/social_recipes)
+The official image is available on Docker Hub: [`pickeld/pick-a-recipe`](https://hub.docker.com/r/pickeld/pick-a-recipe)
 
 ```bash
 # Pull the latest image
-docker pull pickeld/social_recipes:latest
+docker pull pickeld/pick-a-recipe:latest
 
 # Or pull a specific version
-docker pull pickeld/social_recipes:v1.0.0
+docker pull pickeld/pick-a-recipe:v1.0.0
 ```
 
 ### Environment Variables
@@ -247,9 +247,9 @@ docker pull pickeld/social_recipes:v1.0.0
 version: "3.8"
 
 services:
-  social-recipes:
-    image: pickeld/social_recipes:latest
-    container_name: social-recipes
+  pick-a-recipe:
+    image: pickeld/pick-a-recipe:latest
+    container_name: pick-a-recipe
     restart: unless-stopped
     ports:
       - "5006:5006"
@@ -258,10 +258,10 @@ services:
       - PORT=5006
       - FLASK_SECRET_KEY=your-secure-secret-key
     volumes:
-      - social-recipes-data:/app/data
+      - pick-a-recipe-data:/app/data
 
 volumes:
-  social-recipes-data:
+  pick-a-recipe-data:
 ```
 
 ### Building from Source
@@ -269,15 +269,15 @@ volumes:
 If you prefer to build the image yourself:
 
 ```bash
-git clone https://github.com/pickeld/social_recipes.git
-cd social_recipes
-docker build -t social-recipes .
-docker run -p 5006:5006 -e FLASK_SECRET_KEY="your-secret" social-recipes
+git clone https://github.com/pickeld/pick-a-recipe.git
+cd pick-a-recipe
+docker build -t pick-a-recipe .
+docker run -p 5006:5006 -e FLASK_SECRET_KEY="your-secret" pick-a-recipe
 ```
 
 ## Supported Platforms
 
-Social Recipes uses `yt-dlp` for video downloading, which supports:
+Pick-a-Recipe uses `yt-dlp` for video downloading, which supports:
 
 - TikTok
 - YouTube
@@ -285,6 +285,18 @@ Social Recipes uses `yt-dlp` for video downloading, which supports:
 - Facebook Videos
 - Twitter/X Videos
 - And [many more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+
+### Instagram troubleshooting
+
+Instagram frequently blocks automated downloads. Pick-a-Recipe installs `yt-dlp[curl-cffi]` for browser impersonation, which is required for most public reels.
+
+If you still see **"Instagram sent an empty media response"**:
+
+1. **Update** to the latest Docker image or reinstall: `pip install "yt-dlp[curl-cffi]"`
+2. **Confirm the reel opens** in a private/incognito browser window (not logged in). If it does not, the post is private — upload a `cookies.txt` in Settings while logged into Instagram.
+3. **Upload cookies** in Settings → Video Downloads (export from your browser while logged into `instagram.com`).
+
+This is an upstream Instagram/yt-dlp limitation, not a bug in the recipe extraction itself. See [yt-dlp issue #17074](https://github.com/yt-dlp/yt-dlp/issues/17074) for background.
 
 ## License
 

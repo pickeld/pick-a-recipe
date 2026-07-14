@@ -1,6 +1,6 @@
-# Social Recipes Web UI
+# Pick-a-Recipe Web UI
 
-A modern web interface for the Social Recipes video recipe extractor.
+A modern web interface for the Pick-a-Recipe video recipe extractor.
 
 ## Features
 
@@ -79,7 +79,7 @@ ui/
 
 The UI uses SQLite for data storage. A single database file is created in the project root:
 
-- `social_recipes.db` - SQLite database containing:
+- `pick-a-recipe.db` - SQLite database containing:
   - `users` table - User credentials (hashed passwords)
   - `config` table - Configuration key-value pairs
 

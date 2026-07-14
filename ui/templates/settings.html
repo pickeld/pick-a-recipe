@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}Settings - Social Recipes{% endblock %}
+{% block title %}Settings - Pick-a-Recipe{% endblock %}
 
 {% block content %}
 <div class="settings-container">
     <div class="settings-header">
         <h1><i class="fas fa-cog"></i> Settings</h1>
-        <p>Configure your Social Recipes application</p>
+        <p>Configure your Pick-a-Recipe application</p>
     </div>
     
     <form method="POST" action="{{ url_for('settings') }}" class="settings-form">
@@ -153,8 +153,8 @@
         
         <!-- YouTube / Video Download Settings -->
         <div class="settings-section">
-            <h2><i class="fab fa-youtube"></i> YouTube / Video Downloads</h2>
-            <p class="section-description">Configure authentication for YouTube and other video platforms. This is required if you see "Sign in to confirm you're not a bot" errors.</p>
+            <h2><i class="fas fa-video"></i> Video Downloads (YouTube, Instagram, etc.)</h2>
+            <p class="section-description">Configure authentication when downloads fail. YouTube may show bot-check errors; Instagram may block anonymous requests or require login for private reels.</p>
             
             <div class="form-group">
                 <label for="yt_dlp_cookies_browser">Extract Cookies from Browser</label>
@@ -169,7 +169,7 @@
                     <option value="vivaldi" {% if config.yt_dlp_cookies_browser == 'vivaldi' %}selected{% endif %}>Vivaldi</option>
                     <option value="chromium" {% if config.yt_dlp_cookies_browser == 'chromium' %}selected{% endif %}>Chromium</option>
                 </select>
-                <small class="form-hint">Automatically extract cookies from a browser installed on the server. The browser must be logged into YouTube. <strong>Note:</strong> This only works if Social Recipes runs on the same machine as your browser (not in Docker).</small>
+                <small class="form-hint">Automatically extract cookies from a browser installed on the server. The browser must be logged into the video site. <strong>Note:</strong> This only works if Pick-a-Recipe runs on the same machine as your browser (not in Docker).</small>
             </div>
             
             <div class="form-group">
@@ -206,8 +206,8 @@
                 <strong>How to get cookies:</strong>
                 <ol style="margin: 10px 0 0 20px; padding: 0;">
                     <li>Install a browser extension like "Get cookies.txt LOCALLY" or "cookies.txt"</li>
-                    <li>Log into YouTube in your browser</li>
-                    <li>Use the extension to export cookies for youtube.com</li>
+                    <li>Log into the video site in your browser (YouTube, Instagram, etc.)</li>
+                    <li>Use the extension to export cookies for that site (include <code>instagram.com</code> for Instagram reels)</li>
                     <li>Click "Choose cookies.txt file" above to upload the exported file</li>
                 </ol>
             </div>
@@ -302,7 +302,7 @@ document.getElementById('export-settings-btn').addEventListener('click', async f
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'social_recipes_settings.json';
+        a.download = 'pick-a-recipe-settings.json';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);

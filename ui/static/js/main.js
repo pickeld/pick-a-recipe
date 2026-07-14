@@ -1,5 +1,5 @@
 /**
- * Social Recipes UI - Main JavaScript
+ * Pick-a-Recipe UI - Main JavaScript
  * Supports multiple concurrent jobs with progress persistence
  */
 

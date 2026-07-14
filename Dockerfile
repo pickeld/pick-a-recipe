@@ -36,5 +36,5 @@ HEALTHCHECK --interval=5m --timeout=20s --start-period=40s --retries=3 \
 ENV FLASK_DEBUG=false
 ENV PYTHONPATH=/app
 
-# Upgrade yt-dlp to latest version on startup and run the Flask application
-CMD ["sh", "-c", "pip install --upgrade yt-dlp && python ui/app.py"]
+# Upgrade yt-dlp (with curl-cffi for Instagram impersonation) on startup
+CMD ["sh", "-c", "pip install --upgrade \"yt-dlp[curl-cffi]\" && python ui/app.py"]

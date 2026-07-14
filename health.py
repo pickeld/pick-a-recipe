@@ -55,6 +55,16 @@ def check_ytdlp(probe_network: bool = False) -> dict:
 
     version = getattr(getattr(yt_dlp, "version", None), "__version__", "unknown")
 
+    try:
+        import curl_cffi  # noqa: F401
+    except ImportError:
+        return _result(
+            "yt-dlp", False,
+            f"yt-dlp {version} present but curl-cffi is missing (required for Instagram)",
+            "Reinstall with browser impersonation support: "
+            "pip install \"yt-dlp[curl-cffi]\". Docker users should pull the latest image.",
+        )
+
     # ffmpeg is required for audio extraction / muxing; deno is required by
     # yt-dlp's YouTube extractor. Missing either fails downloads, not import.
     missing = [tool for tool in ("ffmpeg", "deno") if shutil.which(tool) is None]
@@ -83,7 +93,7 @@ def check_ytdlp(probe_network: bool = False) -> dict:
                 "cookies in Settings.",
             )
 
-    return _result("yt-dlp", True, f"yt-dlp {version} OK (ffmpeg, deno present)")
+    return _result("yt-dlp", True, f"yt-dlp {version} OK (ffmpeg, deno, curl-cffi present)")
 
 
 def check_llm(probe_network: bool = False) -> dict:
