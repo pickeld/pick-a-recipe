@@ -130,7 +130,8 @@ class VideoDownloader:
             ydl_opts = {
                 **self._base_ydl_opts(),
                 "outtmpl": video_path,
-                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                # Prefer a single merged file with audio; fall back to mux or best available.
+                "format": "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
                 "merge_output_format": "mp4",
             }
 

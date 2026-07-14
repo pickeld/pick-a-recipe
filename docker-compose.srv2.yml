@@ -1,15 +1,15 @@
-# srv2 deployment — PIC-44
-# Source-mounted + hot-reload: source lives at /opt/pick-a-recipe (bind mount),
-# Werkzeug reloader (FLASK_DEBUG=true) picks up host edits live.
-# Python deps are baked into the image (site-packages), so the /app bind mount
-# only overlays application code — installed deps remain intact.
-# Data volume reuses the pre-existing named volume so the recipes DB is preserved.
+# srv2 deployment — superseded by portainer/stack.yml
+# Repo path: /opt/pick-a-recipe
+# Image: pickeld/pick-a-recipe:latest
+# Deploy / update:
+#   ./scripts/portainer-migrate.sh
+# or (with Portainer API credentials):
+#   ./scripts/portainer-deploy.sh --pull
+#
+# Legacy source-mounted dev stack kept for reference only.
 services:
   pick-a-recipe:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: pick-a-recipe:srv2
+    image: pickeld/pick-a-recipe:latest
     container_name: pick-a-recipe
     restart: unless-stopped
     ports:
@@ -17,13 +17,12 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=5006
-      - FLASK_DEBUG=true          # enables Werkzeug reloader -> hot reload
-      - PYTHONPATH=/app
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change-me-to-a-random-secret-key}
     volumes:
-      - ./:/app                          # external-mounted source -> hot reload
-      - pick-a-recipe-data:/app/data    # preserve existing recipes DB
+      - pick-a-recipe-data:/app/data
       - pick-a-recipe-data:/tmp
 
 volumes:
   pick-a-recipe-data:
+    external: true
+    name: social_recipe_social-recipes

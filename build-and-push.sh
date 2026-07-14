@@ -13,7 +13,8 @@
 #
 # Requirements:
 #   - Docker with buildx support (Docker Desktop includes this)
-#   - Logged in to Docker Hub (run 'docker login' first)
+#   - Logged in to Docker Hub as pickeld (username or pickeld@gmail.com)
+#     Run: docker logout && docker login -u pickeld
 #
 
 set -e
@@ -55,19 +56,24 @@ if ! docker buildx version &> /dev/null; then
     exit 1
 fi
 
-# Check if logged in to Docker Hub
+# Check if logged in to Docker Hub (pickeld account — may show as email)
 echo ""
 echo "Checking Docker Hub login..."
-if ! docker info 2>/dev/null | grep -q "Username"; then
+DOCKER_USER="$(docker info 2>/dev/null | sed -n 's/.*Username: //p' | head -1)"
+DOCKER_NAMESPACE="${DOCKER_REPO%%/*}"
+if [[ -z "${DOCKER_USER}" ]]; then
     echo ""
-    echo "Warning: You may not be logged in to Docker Hub."
-    echo "Please run 'docker login' first."
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+    echo "Error: Not logged in to Docker Hub."
+    echo "Run: docker logout && docker login -u pickeld   # accepts pickeld@gmail.com too"
+    exit 1
 fi
+if [[ "${DOCKER_USER}" != "${DOCKER_NAMESPACE}" && "${DOCKER_USER}" != "pickeld@gmail.com" ]]; then
+    echo ""
+    echo "Error: Logged in as '${DOCKER_USER}', but pushes require the '${DOCKER_NAMESPACE}' account."
+    echo "Run: docker logout && docker login -u pickeld   # accepts pickeld@gmail.com too"
+    exit 1
+fi
+echo "Logged in as: ${DOCKER_USER}"
 
 # Create or use buildx builder
 echo ""

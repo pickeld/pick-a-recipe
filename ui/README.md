@@ -25,7 +25,13 @@ cd ui
 python app.py
 ```
 
-3. Open your browser and navigate to: `http://localhost:5000`
+3. Open your browser and navigate to: `http://localhost:5006`
+
+Or run via Docker:
+
+```bash
+docker run -d -p 5006:5006 -v pick-a-recipe-data:/app/data pickeld/pick-a-recipe:latest
+```
 
 ## Default Login
 
@@ -79,7 +85,7 @@ ui/
 
 The UI uses SQLite for data storage. A single database file is created in the project root:
 
-- `pick-a-recipe.db` - SQLite database containing:
+- `data/pick-a-recipe.db` - SQLite database containing:
   - `users` table - User credentials (hashed passwords)
   - `config` table - Configuration key-value pairs
 

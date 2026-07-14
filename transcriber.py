@@ -33,23 +33,36 @@ class Transcriber:
 
     def _get_video_duration(self) -> float:
         """Get video duration in seconds using ffprobe."""
-        duration_cmd = [
+        return self._get_file_duration(self.video_path)
+
+    def _has_audio_stream(self) -> bool:
+        """Return True if the video file contains at least one audio stream."""
+        probe_cmd = [
             "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            self.video_path
+            "-select_streams", "a",
+            "-show_entries", "stream=index",
+            "-of", "csv=p=0",
+            self.video_path,
         ]
         try:
-            result = subprocess.run(duration_cmd, capture_output=True, text=True, check=True)
-            return float(result.stdout.strip())
-        except (subprocess.CalledProcessError, ValueError):
-            return 0.0
+            result = subprocess.run(
+                probe_cmd, capture_output=True, text=True, check=True,
+            )
+            return bool(result.stdout.strip())
+        except subprocess.CalledProcessError:
+            return False
 
     def _extract_audio(self, overwrite: bool = False):
         """Extract mono WAV audio at 16kHz using ffmpeg with progress indicator."""
         if os.path.exists(self.audio_path) and not overwrite:
             logger.info("[Transcribe] Using cached audio file.")
             return self.audio_path
+
+        if not self._has_audio_stream():
+            logger.warning(
+                "[Transcribe] Video has no audio stream; skipping audio extraction."
+            )
+            return None
 
         # Get video duration for progress estimation
         duration = self._get_video_duration()
@@ -68,7 +81,7 @@ class Transcriber:
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True
         )
         
@@ -76,6 +89,7 @@ class Transcriber:
         start_time = time.time()
         current_time = 0.0
         
+        stderr = ""
         if process.stdout:
             for line in process.stdout:
                 line = line.strip()
@@ -96,17 +110,33 @@ class Transcriber:
                         pass
                 elif line == "progress=end":
                     break
-        
+
         process.wait()
+        if process.stderr:
+            stderr = process.stderr.read()
         
         # Clear progress line and print completion
         if duration > 0:
             elapsed = time.time() - start_time
-            sys.stdout.write(f"\r[Transcribe] Audio extraction complete ({elapsed:.1f}s)                    \n")
-            sys.stdout.flush()
+            if process.returncode == 0:
+                sys.stdout.write(f"\r[Transcribe] Audio extraction complete ({elapsed:.1f}s)                    \n")
+                sys.stdout.flush()
         
         if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, cmd)
+            stderr_tail = (stderr or "").strip().splitlines()[-3:]
+            detail = " ".join(stderr_tail) if stderr_tail else "unknown error"
+            no_audio = (
+                process.returncode == 234
+                or "does not contain any stream" in (stderr or "")
+            )
+            if no_audio:
+                logger.warning(
+                    "[Transcribe] Video has no usable audio stream; skipping audio extraction."
+                )
+                return None
+            raise RuntimeError(
+                f"ffmpeg audio extraction failed (exit {process.returncode}): {detail}"
+            ) from None
         
         logger.info(f"[Transcribe] Audio saved to: {self.audio_path}")
         return self.audio_path
@@ -149,14 +179,20 @@ class Transcriber:
             language: Language code for transcription (e.g., 'he', 'en').
                      Defaults to config.TARGET_LANGUAGE if not specified.
         """
-        self._extract_audio()
+        audio_path = self._extract_audio()
+        if audio_path is None:
+            logger.info(
+                "[Transcribe] No audio available; continuing with visual text only."
+            )
+            return ""
+
         self._load_model()
 
         # Use target language from config if not specified
         lang = language or config.TARGET_LANGUAGE
 
         segments, info = self.model.transcribe(
-            self.audio_path, language=lang)
+            audio_path, language=lang)
         
         text_parts = []
         for seg in segments:
