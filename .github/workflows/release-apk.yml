@@ -1,0 +1,155 @@
+# Builds the Android APK and attaches it to a GitHub release.
+#
+# Releases are still created by hand, as they always have been; this only
+# attaches the APK once one is published. Use the manual trigger to attach an
+# APK to a release that already exists.
+#
+# Required repository secrets — mobile/android/key.properties.example has the
+# keytool command and setup steps:
+#   ANDROID_KEYSTORE_BASE64    base64 of the upload keystore (.jks)
+#   ANDROID_KEYSTORE_PASSWORD  keystore password
+#   ANDROID_KEY_PASSWORD       key password
+#   ANDROID_KEY_ALIAS          key alias (e.g. upload)
+#
+# The signing identity cannot be changed once users have installed a build:
+# Android refuses an update signed with a different key. Treat the keystore as
+# unrecoverable if lost.
+name: Release APK
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to attach an APK to (e.g. v1.6.0)'
+        required: true
+
+concurrency:
+  group: release-apk-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # required to upload a release asset
+
+jobs:
+  apk:
+    name: Build and attach APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: release
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          if [[ -z "$TAG" ]]; then
+            echo "::error::No release tag to work with"
+            exit 1
+          fi
+          # Android versionName has no leading 'v'.
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check signing secrets are present
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [[ -z "$KEYSTORE" ]]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set. See" \
+                 "mobile/android/key.properties.example. Publishing a" \
+                 "debug-signed APK would lock users out of future updates."
+            exit 1
+          fi
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        # Third-party action, pinned to a commit rather than a movable tag.
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: 3.44.8
+          channel: stable
+          cache: true
+
+      - name: Restore signing keystore
+        working-directory: mobile/android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          # No shell tracing in this step: it would echo the passwords.
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > app/upload.jks
+          # storeFile is resolved relative to android/app.
+          {
+            printf 'storeFile=upload.jks\n'
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+          } > key.properties
+          echo "Keystore restored ($(stat -c%s app/upload.jks) bytes)"
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: Build release APK
+        working-directory: mobile
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          # build-name comes from the tag so the APK reports the same version
+          # as the release. build-number must only ever increase, which
+          # run_number guarantees; the tag cannot, since Android needs an int.
+          #
+          # Deliberately not obfuscated. Nothing sensitive is compiled in — the
+          # OIDC client secret stays server-side by design, and the API host and
+          # deep-link scheme are already public in the manifest — so the only
+          # effects would be unreadable crash traces and a published artifact
+          # that differs from the one tested by hand.
+          flutter build apk --release \
+            --dart-define=FLAVOR=prod \
+            --build-name="$VERSION" \
+            --build-number="${{ github.run_number }}"
+
+      - name: Report signing certificate
+        working-directory: mobile
+        run: |
+          # Printed so a key change between releases is noticeable: a differing
+          # fingerprint means installed users cannot update in place.
+          APKSIGNER=$(find "$ANDROID_HOME"/build-tools -name apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs \
+            build/app/outputs/flutter-apk/app-release.apk \
+            | grep -iE 'certificate DN|SHA-256' || true
+
+      - name: Name the asset after the release
+        id: asset
+        working-directory: mobile
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          NAME="pick-a-recipe-$TAG.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "$NAME"
+          echo "path=mobile/$NAME" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          ls -lh "$NAME"
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          ASSET: ${{ steps.asset.outputs.path }}
+        # clobber so re-running the job replaces the asset instead of failing.
+        run: gh release upload "$TAG" "$ASSET" --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Remove signing material
+        if: always()
+        working-directory: mobile/android
+        run: rm -f app/upload.jks key.properties
