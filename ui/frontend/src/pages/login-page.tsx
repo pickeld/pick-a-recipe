@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ChefHat, Download, TriangleAlert } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -129,13 +130,10 @@ export function LoginPage() {
   const ssoEnabled = data?.sso_enabled ?? true
   const localAuth = data?.local_auth_enabled ?? false
 
-  // A fresh instance has no account yet; the server-rendered setup page is the
-  // only thing that can create one.
-  useEffect(() => {
-    if (data?.setup_required) {
-      window.location.href = '/setup'
-    }
-  }, [data?.setup_required])
+  // A fresh instance has no account yet, so there is nothing to sign in to.
+  if (data?.setup_required) {
+    return <Navigate to="/setup" replace />
+  }
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-4">
