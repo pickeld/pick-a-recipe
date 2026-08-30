@@ -199,5 +199,6 @@ def call_with_model_fallback(provider, configured_model, call, *, persist=True):
     raise ModelUnavailableError(
         f"The configured {provider} model '{configured_model}' and all fallbacks "
         f"are unavailable or persistently overloaded: {candidates}. "
+        f"Pick a currently available {provider} model in Settings. "
         f"Last error: {last_error}"
     )
