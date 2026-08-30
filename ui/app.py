@@ -573,6 +573,23 @@ def _authentik_token_endpoints() -> tuple[str, str]:
         return f'{AUTHENTIK_ISSUER_URL}/token/', f'{AUTHENTIK_ISSUER_URL}/userinfo/'
 
 
+# The set RFC 6749 §4.1.2.1 defines. Anything outside it is reported
+# generically rather than reflected, so a provider cannot put text of its
+# choosing into a redirect aimed at the app.
+_OAUTH_ERROR_CODES = frozenset({
+    'invalid_request', 'unauthorized_client', 'access_denied',
+    'unsupported_response_type', 'invalid_scope', 'server_error',
+    'temporarily_unavailable',
+})
+
+
+def _mobile_idp_error(nonce_row: dict, idp_error: str):
+    """Hand an identity-provider error back to the app over its deep link."""
+    code = idp_error if idp_error in _OAUTH_ERROR_CODES else 'server_error'
+    print(f'[MobileAuth] identity provider returned error={code}')
+    return redirect(f'{nonce_row["redirect_uri"]}#{urlencode({"error": code})}')
+
+
 def _mobile_oidc_callback(code: str | None, nonce_row: dict):
     """Finish sign-in for the Android app and hand tokens back via deep link.
 
@@ -645,23 +662,30 @@ def auth_callback():
     if oauth is None:
         return redirect(url_for('login'))
 
-    if 'error' in request.args:
-        reason = request.args.get('error_description') or request.args.get('error')
-        flash(f'Sign-in failed: {reason}', 'error')
-        return redirect(url_for('login'))
+    idp_error = request.args.get('error')
 
-    # A state we issued as a mobile nonce belongs to the app flow. Recognising a
-    # spent one lets us reject a replay outright instead of falling through to
-    # the browser flow, which would only fail with a confusing session error.
+    # Which flow this callback belongs to has to be settled before the error is
+    # handled. A state we issued as a mobile nonce belongs to the app, and its
+    # errors have to travel back over the deep link; flashing them would strand
+    # the user in a browser on the web login page with the app none the wiser.
+    # Recognising a spent nonce also lets us reject a replay outright instead of
+    # falling through to the browser flow and failing with a session error.
     state = request.args.get('state') or ''
     if state:
         nonce_row = consume_mobile_nonce(state)
         if nonce_row is not None:
+            if idp_error:
+                return _mobile_idp_error(nonce_row, idp_error)
             return _mobile_oidc_callback(request.args.get('code'), nonce_row)
         if mobile_nonce_exists(state):
             print('[MobileAuth] rejected replayed or expired sign-in state')
             return jsonify({'error': 'This sign-in link has already been used or '
                                      'has expired. Please sign in again.'}), 400
+
+    if idp_error:
+        reason = request.args.get('error_description') or idp_error
+        flash(f'Sign-in failed: {reason}', 'error')
+        return redirect(url_for('login'))
 
     try:
         token = oauth.authentik.authorize_access_token()
