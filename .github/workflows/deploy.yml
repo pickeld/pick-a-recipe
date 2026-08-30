@@ -21,6 +21,11 @@
 #                       Google SSO keys, ...). Written to portainer/stack.env.local
 #                       before deploying so the real app secrets reach the stack —
 #                       without it the deploy would overwrite them with placeholders.
+#
+# Optional repository secrets:
+#   JWT_SECRET_KEY      Signing key for Android app tokens, appended to the stack
+#                       env above. Unset leaves /api/mobile/* returning 503.
+#                       Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
 
 name: Build & Deploy
 
@@ -78,12 +83,22 @@ jobs:
       - name: Write stack env from secret
         env:
           STACK_ENV_LOCAL: ${{ secrets.STACK_ENV_LOCAL }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
         run: |
           if [[ -z "$STACK_ENV_LOCAL" ]]; then
             echo "::error::STACK_ENV_LOCAL secret is not set — see header of .github/workflows/deploy.yml"
             exit 1
           fi
           printf '%s\n' "$STACK_ENV_LOCAL" > portainer/stack.env.local
+          # Kept as its own secret so rotating it does not mean re-pasting the
+          # whole env blob. Appended last, so it wins over any JWT_SECRET_KEY in
+          # STACK_ENV_LOCAL; unset simply leaves mobile auth disabled.
+          if [[ -n "$JWT_SECRET_KEY" ]]; then
+            printf 'JWT_SECRET_KEY=%s\n' "$JWT_SECRET_KEY" >> portainer/stack.env.local
+            echo "Mobile auth: JWT_SECRET_KEY supplied"
+          else
+            echo "Mobile auth: JWT_SECRET_KEY not set — /api/mobile/* will return 503"
+          fi
 
       - name: Update srv2 stack (pull new image)
         env:
