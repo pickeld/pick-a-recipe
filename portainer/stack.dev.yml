@@ -20,6 +20,7 @@ services:
       FLASK_DEBUG: "true"
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
       MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-3}
+      AUTH_MODE: ${AUTH_MODE:-authentik}
       AUTHENTIK_ISSUER_URL: ${AUTHENTIK_ISSUER_URL:-https://auth.pickel.me/application/o/pick-a-recipe}
       AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
       AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}

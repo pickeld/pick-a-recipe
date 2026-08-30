@@ -91,12 +91,16 @@ export function AppSidebar() {
                 <Moon className="size-4" />
               )}
             </Button>
-            <Separator orientation="vertical" className="h-5" />
-            <a href="/logout" aria-label="Log out">
-              <Button variant="ghost" size="icon" title="Logout">
-                <LogOut className="size-4" />
-              </Button>
-            </a>
+            {!session?.auth_disabled && (
+              <>
+                <Separator orientation="vertical" className="h-5" />
+                <a href="/logout" aria-label="Log out">
+                  <Button variant="ghost" size="icon" title="Logout">
+                    <LogOut className="size-4" />
+                  </Button>
+                </a>
+              </>
+            )}
           </div>
           {session && (
             <div className="flex items-center gap-1.5 px-3 pb-2 text-xs text-muted-foreground">

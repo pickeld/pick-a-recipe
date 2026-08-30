@@ -53,11 +53,16 @@ docker run -d \
   --name pick-a-recipe \
   -p 5006:5006 \
   -e FLASK_SECRET_KEY="your-secure-secret-key" \
+  -e AUTH_MODE=none \
   -v pick-a-recipe-data:/app/data \
   pickeld/pick-a-recipe:latest
 ```
 
 Access the web UI at `http://localhost:5006`
+
+`AUTH_MODE=none` runs the app with no sign-in, as a single local admin — the
+quickest way to get started on a home network. To require sign-in instead, see
+[Authentication](#authentication).
 
 **Option 2: Using Docker Compose**
 
@@ -75,6 +80,7 @@ services:
       - "5006:5006"
     environment:
       - FLASK_SECRET_KEY=your-secure-secret-key
+      - AUTH_MODE=none
     volumes:
       - pick-a-recipe-data:/app/data
 
@@ -116,19 +122,66 @@ Access the web UI at `http://localhost:5006`
 
 4. Run the application:
    ```bash
-   python ui/app.py
+   AUTH_MODE=none python ui/app.py
    ```
+   `AUTH_MODE=none` skips sign-in for local development. Omit it to require
+   Authentik single sign-on — see [Authentication](#authentication).
 
 5. Access the web UI at `http://localhost:5006`
 
 ## Configuration
 
-All configuration is managed through the web UI settings page (`/settings`). On first run, use the default credentials:
+All configuration is managed through the web UI settings page (`/settings`).
 
-- **Username:** `admin`
-- **Password:** `admin123`
+### Authentication
 
-> ⚠️ **Important:** Change the default password immediately after first login!
+Pick-a-Recipe has two authentication modes, selected with `AUTH_MODE`:
+
+| `AUTH_MODE` | Behaviour |
+|-------------|-----------|
+| `authentik` (default) | Sign-in is required, via Authentik single sign-on (OIDC). |
+| `none` | No sign-in. Every request runs as one local admin. |
+
+**`AUTH_MODE=none` — no identity provider**
+
+Set `AUTH_MODE=none` and the app is immediately usable with no sign-in step:
+
+```bash
+docker run -d --name pick-a-recipe -p 5006:5006 \
+  -e AUTH_MODE=none \
+  -v pick-a-recipe-data:/app/data \
+  pickeld/pick-a-recipe:latest
+```
+
+> ⚠️ There is no access control at all in this mode. Anyone who can reach the
+> port has full access, including the LLM, Mealie and Tandoor API keys stored in
+> Settings. Only use it on a trusted network — never expose it to the internet.
+
+The local account is named `local`; override it with `AUTH_LOCAL_USERNAME`.
+
+**`AUTH_MODE=authentik` — single sign-on (default)**
+
+Requires an [Authentik](https://goauthentik.io/) instance. Create an OAuth2/OIDC
+provider for the app and set:
+
+```bash
+AUTHENTIK_ISSUER_URL=https://auth.example.com/application/o/pick-a-recipe
+AUTHENTIK_CLIENT_ID=...
+AUTHENTIK_CLIENT_SECRET=...
+```
+
+Access is gated on group membership: users need `AUTHENTIK_USER_GROUP`
+(default `pick-a-recipe-users`), and admins additionally need
+`AUTHENTIK_ADMIN_GROUP` (default `admins`). Add the *authentik read groups*
+scope mapping to the provider so the `groups` claim is present in tokens.
+
+Behind a reverse proxy, set `PUBLIC_URL` (or `AUTHENTIK_REDIRECT_URI`) so the
+OIDC callback URL matches what you registered in Authentik, and set
+`SESSION_COOKIE_SECURE=true` when serving over HTTPS.
+
+If neither `AUTH_MODE=none` nor Authentik credentials are configured, nobody can
+sign in and the login page will say so — this is the default, and it fails closed
+on purpose.
 
 ### Settings
 
@@ -249,8 +302,10 @@ docker pull pickeld/pick-a-recipe:v1.0.0
 | `FLASK_SECRET_KEY` | Secret key for session cookies | Auto-generated |
 | `FLASK_DEBUG` | Enable debug mode | `false` |
 | `MAX_CONCURRENT_JOBS` | Parallel extraction workers (1–16) | `3` (or Settings value) |
+| `AUTH_MODE` | `authentik` for SSO, or `none` to disable sign-in ([details](#authentication)) | `authentik` |
+| `AUTH_LOCAL_USERNAME` | Account name used when `AUTH_MODE=none` | `local` |
 | `AUTHENTIK_ISSUER_URL` | Authentik OIDC issuer URL | `https://auth.pickel.me/application/o/pick-a-recipe` |
-| `AUTHENTIK_CLIENT_ID` | Authentik OAuth2 client ID (required for sign-in) | — |
+| `AUTHENTIK_CLIENT_ID` | Authentik OAuth2 client ID (required unless `AUTH_MODE=none`) | — |
 | `AUTHENTIK_CLIENT_SECRET` | Authentik OAuth2 client secret | — |
 | `AUTHENTIK_USER_GROUP` | Authentik group required for access | `pick-a-recipe-users` |
 | `AUTHENTIK_ADMIN_GROUP` | Authentik group granting admin rights | `admins` |
@@ -272,6 +327,8 @@ services:
       - HOST=0.0.0.0
       - PORT=5006
       - FLASK_SECRET_KEY=your-secure-secret-key
+      # No sign-in; see the Authentication section before exposing this
+      - AUTH_MODE=none
     volumes:
       - pick-a-recipe-data:/app/data
 

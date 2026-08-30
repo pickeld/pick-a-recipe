@@ -98,7 +98,11 @@ export function LoginPage() {
                   <code className="rounded bg-destructive/15 px-1 font-mono text-xs">
                     AUTHENTIK_CLIENT_SECRET
                   </code>
-                  .
+                  , or set{' '}
+                  <code className="rounded bg-destructive/15 px-1 font-mono text-xs">
+                    AUTH_MODE=none
+                  </code>{' '}
+                  to run without authentication.
                 </span>
               </div>
             )}
