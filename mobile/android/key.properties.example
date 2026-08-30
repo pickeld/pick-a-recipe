@@ -1,11 +1,35 @@
-# Copy to android/key.properties (gitignored) to enable release signing.
-# Generate a keystore first (keep the .jks OUT of git):
+# Release signing.
 #
-#   keytool -genkey -v -keystore ~/pick-a-recipe-upload.jks \
-#     -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+# The signing key CANNOT be changed once anyone has installed a build: Android
+# refuses an update signed with a different key, so users would have to
+# uninstall and lose their data. Losing the keystore has the same effect.
+# Generate it once, back it up somewhere durable.
 #
-# Then fill in the values below. storeFile may be absolute or relative to
-# android/app/.
+#   keytool -genkeypair -v -keystore ~/pick-a-recipe-upload.jks \
+#     -keyalg RSA -keysize 4096 -validity 10000 -alias upload
+#
+# Keep the .jks OUT of git.
+#
+# ── Local builds ─────────────────────────────────────────────────────────────
+# Copy this file to android/key.properties (gitignored) and fill it in.
+# storeFile may be absolute, or relative to android/app/.
+#
+# Without key.properties, a release build falls back to the debug key. That is
+# fine for testing on your own device, but never publish the result.
+#
+# ── CI releases ──────────────────────────────────────────────────────────────
+# .github/workflows/release-apk.yml writes this file itself from repository
+# secrets, so nothing here needs committing. Add these under
+# Settings -> Secrets and variables -> Actions:
+#
+#   ANDROID_KEYSTORE_BASE64     base64 -i ~/pick-a-recipe-upload.jks | pbcopy
+#   ANDROID_KEYSTORE_PASSWORD   the -storepass you chose
+#   ANDROID_KEY_PASSWORD        the -keypass you chose (often the same)
+#   ANDROID_KEY_ALIAS           upload
+#
+# That workflow fails early if the keystore secret is missing rather than
+# silently publishing a debug-signed APK. It also prints the certificate's
+# SHA-256 fingerprint on every run: it must stay identical across releases.
 storePassword=CHANGE_ME
 keyPassword=CHANGE_ME
 keyAlias=upload
