@@ -26,6 +26,7 @@ GOOD_PASSWORD = 'a properly long passphrase'
 # Prelude shared by the forked scripts: local mode, an empty users table, and a
 # helper that creates the first account without going through the HTTP flow.
 _PRELUDE = f"""
+    import os
     import database, login_throttle, passwords
     from app import app
 
@@ -96,8 +97,29 @@ class TestFirstRunSetup(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.res = _run_local("""
+            import app as app_module
+
+            # This class covers the server-rendered fallback, so point the app
+            # at a bundle that is not there. Otherwise whether these assertions
+            # see a Jinja form or the SPA shell would depend on whether someone
+            # had run `npm run build` before pytest.
+            spa_dist = app_module.FRONTEND_DIST
+            app_module.FRONTEND_DIST = '/nonexistent-frontend-dist'
+
             client = app.test_client()
             page = client.get('/setup')
+
+            # With a bundle present the SPA takes over, and its /setup route
+            # drives the same endpoints.
+            app_module.FRONTEND_DIST = spa_dist
+            spa_page = app.test_client().get('/setup')
+            spa_served = (
+                spa_page.status_code == 200
+                and b'Create account' not in spa_page.data
+                if os.path.exists(os.path.join(spa_dist, 'index.html'))
+                else None
+            )
+            app_module.FRONTEND_DIST = '/nonexistent-frontend-dist'
 
             created = client.post('/setup', data={
                 'username': 'chef',
@@ -119,6 +141,7 @@ class TestFirstRunSetup(unittest.TestCase):
             emit(
                 page_status=page.status_code,
                 page_has_form=b'Create account' in page.data,
+                spa_served=spa_served,
                 created_status=created.status_code,
                 row_is_admin=bool(row and row['is_admin']),
                 row_hash_is_argon2id=(row or {}).get(
@@ -132,8 +155,15 @@ class TestFirstRunSetup(unittest.TestCase):
         """)
 
     def test_setup_page_served_while_no_account_exists(self):
+        """A source checkout with no built bundle still has to be set up."""
         self.assertEqual(self.res['page_status'], 200)
         self.assertTrue(self.res['page_has_form'])
+
+    def test_built_bundle_takes_over_the_page(self):
+        served = self.res['spa_served']
+        if served is None:
+            self.skipTest('no frontend bundle built in this checkout')
+        self.assertTrue(served)
 
     def test_setup_creates_an_admin(self):
         self.assertEqual(self.res['created_status'], 302)
@@ -199,6 +229,74 @@ class TestSetupValidation(unittest.TestCase):
         self._assert_rejected(self.res['long_user'])
 
 
+class TestJsonSetupEndpoint(unittest.TestCase):
+    """/api/setup, the SPA's route into a fresh instance."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.res = _run_local("""
+            database.ensure_local_user('local')  # an AUTH_MODE=none leftover
+
+            info = app.test_client().get('/api/setup')
+
+            short = app.test_client().post(
+                '/api/setup',
+                json={'username': 'chef', 'password': 'abc',
+                      'confirm_password': 'abc'},
+            )
+
+            client = app.test_client()
+            created = client.post(
+                '/api/setup',
+                json={'username': 'local', 'password': GOOD_PASSWORD,
+                      'confirm_password': GOOD_PASSWORD},
+            )
+            authed_after = client.get('/api/me').status_code
+
+            # A tab left open on the setup page after someone else finished.
+            stale_get = app.test_client().get('/api/setup')
+            stale_post = app.test_client().post(
+                '/api/setup',
+                json={'username': 'usurper', 'password': GOOD_PASSWORD,
+                      'confirm_password': GOOD_PASSWORD},
+            )
+
+            emit(
+                info_status=info.status_code,
+                info_body=info.get_json(),
+                short_status=short.status_code,
+                short_error=(short.get_json() or {}).get('error', ''),
+                created_status=created.status_code,
+                created_body=created.get_json(),
+                authed_after=authed_after,
+                stale_get_status=stale_get.status_code,
+                stale_post_status=stale_post.status_code,
+                usurper_exists=database.get_user('usurper') is not None,
+            )
+        """)
+
+    def test_info_reports_the_adoptable_account(self):
+        self.assertEqual(self.res['info_status'], 200)
+        self.assertEqual(self.res['info_body']['suggested_username'], 'local')
+        self.assertEqual(self.res['info_body']['adopting'], 'local')
+
+    def test_validation_matches_the_form(self):
+        self.assertEqual(self.res['short_status'], 400)
+        self.assertIn('at least', self.res['short_error'])
+
+    def test_creating_the_account_signs_it_in(self):
+        self.assertEqual(self.res['created_status'], 200)
+        self.assertEqual(self.res['created_body']['user'], 'local')
+        self.assertTrue(self.res['created_body']['is_admin'])
+        self.assertEqual(self.res['authed_after'], 200)
+
+    def test_endpoint_closes_once_an_account_exists(self):
+        """409 rather than 404, so a stale tab can tell why and go to /login."""
+        self.assertEqual(self.res['stale_get_status'], 409)
+        self.assertEqual(self.res['stale_post_status'], 409)
+        self.assertFalse(self.res['usurper_exists'])
+
+
 class TestSetupRaceAndAdoption(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -217,11 +315,6 @@ class TestSetupRaceAndAdoption(unittest.TestCase):
             # no password, and every job recorded ownership against its name.
             database.ensure_local_user('local')
             needs_setup_with_passwordless_row = database.local_account_exists()
-
-            # The name the setup form offers. It has to be the existing one, or
-            # the obvious path through the form orphans that account's history.
-            suggested = app.test_client().get('/setup').get_data(as_text=True)
-
             adopted = make_admin('local')
             row = database.get_user('local')
             with database.get_db() as conn:
@@ -232,7 +325,6 @@ class TestSetupRaceAndAdoption(unittest.TestCase):
                 second_claimed=second is not None,
                 second_row_exists=database.get_user('second') is not None,
                 needs_setup_with_passwordless_row=needs_setup_with_passwordless_row,
-                setup_page_offers_existing_name='value="local"' in suggested,
                 adopted=adopted is not None,
                 adopted_has_password=bool(row and row['password_hash']),
                 adopted_is_admin=bool(row and row['is_admin']),
@@ -257,17 +349,13 @@ class TestSetupRaceAndAdoption(unittest.TestCase):
         self.assertTrue(self.res['adopted_oidc_sub_is_null'])
 
     def test_adoption_reuses_the_row_rather_than_adding_one(self):
-        """A new username would orphan the history owned by the old one."""
-        self.assertEqual(self.res['user_count'], 1)
+        """A new username would orphan the history owned by the old one.
 
-    def test_setup_offers_the_adoptable_username(self):
-        """Ownership is stored as the username, so adoption hinges on the name.
-
-        The default suggestion is 'admin', which would not match the 'local'
-        that AUTH_MODE=none seeded — accepting the form as presented has to keep
-        the history rather than silently stranding it.
+        Which is why the name matters: TestJsonSetupEndpoint asserts the setup
+        page offers the adoptable one rather than the 'admin' default, so the
+        obvious path through the form lands here.
         """
-        self.assertTrue(self.res['setup_page_offers_existing_name'])
+        self.assertEqual(self.res['user_count'], 1)
 
 
 class TestLocalLogin(unittest.TestCase):

@@ -4,6 +4,7 @@ import { ThemeProvider } from '@/components/theme-provider'
 import { AppShell } from '@/components/app-shell'
 import { Toaster } from '@/components/ui/sonner'
 import { LoginPage } from '@/pages/login-page'
+import { SetupPage } from '@/pages/setup-page'
 import { HomePage } from '@/pages/home-page'
 import { JobPage } from '@/pages/job-page'
 import { TasksPage } from '@/pages/tasks-page'
@@ -26,6 +27,8 @@ export default function App() {
           <Routes>
             {/* Login is a bare page — Flask handles the actual OIDC redirect */}
             <Route path="/login" element={<LoginPage />} />
+            {/* Bare too: no shell, since there is no session to render one for */}
+            <Route path="/setup" element={<SetupPage />} />
             <Route element={<AppShell />}>
               <Route path="/" element={<HomePage />} />
               <Route path="/jobs/:jobId" element={<JobPage />} />

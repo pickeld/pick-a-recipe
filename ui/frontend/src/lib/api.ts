@@ -274,4 +274,19 @@ export const api = {
       json: { username, password },
       handle401: true,
     }),
+
+  // ===== First-run setup =====
+  // Only answers while the instance has no account; 409 once one exists.
+  setupInfo: () =>
+    request<{ suggested_username: string; adopting: string | null }>('/api/setup'),
+
+  createFirstAccount: (
+    username: string,
+    password: string,
+    confirmPassword: string,
+  ) =>
+    request<{ user: string; is_admin: boolean }>('/api/setup', {
+      method: 'POST',
+      json: { username, password, confirm_password: confirmPassword },
+    }),
 }

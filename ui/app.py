@@ -571,27 +571,52 @@ def login():
     )
 
 
+def _adoptable_username() -> str | None:
+    """The account first-run setup should offer to take over, if there is one.
+
+    An instance upgrading from AUTH_MODE=none already owns jobs and uploads under
+    the name that mode seeded, and ownership is recorded as the username rather
+    than the row id. Offering that name means the obvious path through the form
+    keeps the history; typing a different one starts fresh.
+    """
+    return sole_passwordless_username()
+
+
+def _validate_new_account(username: str, password: str, confirm: str) -> str | None:
+    """Reason the proposed first account is unacceptable, or None if it is fine."""
+    if not username:
+        return 'Choose a username.'
+    if len(username) > 64:
+        return 'Username must be at most 64 characters.'
+    if password != confirm:
+        return 'The two passwords do not match.'
+    try:
+        passwords.validate(password)
+    except passwords.WeakPassword as exc:
+        return str(exc)
+    return None
+
+
 @app.route('/setup', methods=['GET', 'POST'])
 def setup():
     """Create the first account, while the instance has none.
 
-    Served from a template rather than the SPA on purpose: this has to work
-    before the frontend bundle is necessarily built, and it is the only way
-    into a fresh instance.
+    Falls back to a server-rendered form when no frontend bundle is present, so
+    a source checkout without a `npm run build` can still be set up — this is
+    the only way into a fresh instance.
     """
     if not _setup_required():
         # Closed for good once an account exists, so this cannot be used to
         # add a second admin or overwrite the first one's password.
         return redirect(url_for('login'))
 
-    # An instance upgrading from AUTH_MODE=none already owns jobs and uploads
-    # under the name that mode seeded, and ownership is recorded as the username
-    # rather than the row id. Offering that name means the obvious path through
-    # this form keeps the history; typing a different one starts fresh.
-    adoptable = sole_passwordless_username()
+    adoptable = _adoptable_username()
     suggested = adoptable or LOCAL_USERNAME
 
     if request.method == 'GET':
+        spa = os.path.join(FRONTEND_DIST, 'index.html')
+        if os.path.exists(spa):
+            return send_from_directory(FRONTEND_DIST, 'index.html')
         return render_template(
             'setup.html', suggested_username=suggested, adopting=adoptable
         )
@@ -600,19 +625,7 @@ def setup():
     password = request.form.get('password') or ''
     confirm = request.form.get('confirm_password') or ''
 
-    error = None
-    if not username:
-        error = 'Choose a username.'
-    elif len(username) > 64:
-        error = 'Username must be at most 64 characters.'
-    elif password != confirm:
-        error = 'The two passwords do not match.'
-    else:
-        try:
-            passwords.validate(password)
-        except passwords.WeakPassword as exc:
-            error = str(exc)
-
+    error = _validate_new_account(username, password, confirm)
     if error:
         return render_template(
             'setup.html',
@@ -629,6 +642,44 @@ def setup():
     print(f"[Auth] first account created: {user['username']}")
     _establish_session(user['username'], is_admin=True)
     return redirect(url_for('index'))
+
+
+@app.route('/api/setup', methods=['GET', 'POST'])
+def api_setup():
+    """JSON counterpart of /setup, for the SPA.
+
+    Unauthenticated by necessity — it exists precisely because no account does
+    yet — but it stops answering the moment one exists, so it is not a way to
+    read or change an established instance.
+    """
+    if not _setup_required():
+        return jsonify({'error': 'Setup has already been completed.'}), 409
+
+    if request.method == 'GET':
+        adoptable = _adoptable_username()
+        return jsonify({
+            'suggested_username': adoptable or LOCAL_USERNAME,
+            # Named so the client can say what carrying the name over means.
+            'adopting': adoptable,
+        })
+
+    payload = request.get_json(silent=True)
+    source = payload if isinstance(payload, dict) else request.form
+    username = str(source.get('username') or '').strip()
+    password = str(source.get('password') or '')
+    confirm = str(source.get('confirm_password') or '')
+
+    error = _validate_new_account(username, password, confirm)
+    if error:
+        return jsonify({'error': error}), 400
+
+    user = claim_first_local_admin(username, passwords.hash_password(password))
+    if user is None:
+        return jsonify({'error': 'Setup has already been completed.'}), 409
+
+    print(f"[Auth] first account created: {user['username']}")
+    _establish_session(user['username'], is_admin=True)
+    return jsonify({'user': user['username'], 'is_admin': True})
 
 
 @app.route('/auth/local/login', methods=['POST'])
