@@ -175,3 +175,6 @@ ui/frontend/dist/
 
 # ui/frontend/src/lib is SPA source code, not a Python venv lib/
 !ui/frontend/src/lib/
+
+# mobile/lib is Flutter/Dart source code, not a Python venv lib/
+!mobile/lib/

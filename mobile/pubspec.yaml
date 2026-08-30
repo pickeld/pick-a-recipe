@@ -1,0 +1,43 @@
+name: pickarecipe
+description: "Pick-a-Recipe — video-to-recipe companion app."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management / navigation / networking
+  flutter_riverpod: ^3.3.2
+  go_router: ^17.3.0
+  dio: ^5.10.0
+
+  # Secure token storage (Android Keystore)
+  flutter_secure_storage: ^10.3.1
+
+  # Real-time job progress (Flask-SocketIO backend, EIO4)
+  socket_io_client: ^3.1.0
+
+  # OAuth deep-link callback + Android share sheet
+  app_links: ^6.3.2
+  receive_sharing_intent: 1.8.1 # pinned: gradle JVM workaround assumes this version
+
+  cached_network_image: ^3.4.1
+  url_launcher: ^6.3.2
+  package_info_plus: ^8.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+
+  uses-material-design: true
