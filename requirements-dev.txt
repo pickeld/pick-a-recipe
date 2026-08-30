@@ -1,0 +1,9 @@
+# Development and test dependencies.
+#
+# Includes the runtime set so a single install gets you a working checkout:
+#   pip install -r requirements-dev.txt
+#   pytest tests/
+-r requirements.txt
+
+# Pinned to a major line: test-runner majors change collection behaviour.
+pytest~=9.1

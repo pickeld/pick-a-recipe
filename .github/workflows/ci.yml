@@ -1,0 +1,116 @@
+# Pre-merge checks.
+#
+# deploy.yml only fires once main has already moved, so before this workflow
+# nothing verified a pull request: a red test, a type error in the SPA, or a
+# broken Android build config could all reach main unnoticed.
+#
+# Every job runs on every pull request regardless of which paths changed. A
+# paths filter would report "skipped" rather than "success", which blocks a
+# required status check instead of satisfying it.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Server tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Matches the runtime image in Dockerfile.
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        # Each test module puts the repo root and ui/ on sys.path itself, so no
+        # PYTHONPATH is needed here.
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: Web UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Matches the build stage in Dockerfile.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/frontend/package-lock.json
+
+      - name: Install dependencies
+        # ci, not install: honours the lockfile exactly, as the image build does.
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        # Runs tsc -b before vite build, so this is the type check too. The
+        # image build does the same, meaning a type error here would otherwise
+        # only surface as a failed deploy after merge.
+        run: npm run build
+
+  mobile:
+    name: Android app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Matches jvmTarget in android/app/build.gradle.kts.
+          java-version: '17'
+
+      - name: Set up Flutter
+        # Third-party action, pinned to a commit rather than a movable tag.
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: 3.44.8
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build debug APK
+        # Neither analyze nor test touches Gradle, which is exactly how a
+        # broken Android build config survived from the scaffold commit until
+        # someone tried to build an APK by hand.
+        run: flutter build apk --debug --dart-define=FLAVOR=dev
