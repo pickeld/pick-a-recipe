@@ -170,6 +170,33 @@ which would let anyone who knows your username lock you out at will. Wrong
 password and no-such-user return the same message and take comparable time, so
 the login form cannot be used to discover which accounts exist.
 
+**Accounts and admins**
+
+The account created on the setup page is an admin. Admins see the whole settings
+page and manage accounts there; everyone else gets a sign-in and a password form.
+That split exists because settings holds your API keys, so an ordinary account
+should not be able to read them.
+
+Admins can add accounts, grant or revoke admin rights, set a password for someone
+who forgot theirs, and delete accounts. There is no self-registration: on a
+self-hosted instance, an open sign-up form is a way in for anyone who finds the
+URL. Two rules cannot be worked around, because either would leave the instance
+with no way back in: you cannot remove your own admin rights, and you cannot
+remove the last admin's.
+
+Deleting an account removes its queued and in-progress jobs and its pending
+uploads. Recipes that finished are left alone — they belong to the instance, and
+the person leaving is usually not the only one who cares about them. Deleting or
+demoting someone takes effect on their next request rather than whenever their
+cookie expires, so revoking access is immediate.
+
+Changing your own password requires your current one, so a borrowed session
+cannot be used to lock you out of your own account.
+
+In `authentik` mode this section does not apply: accounts, passwords and group
+membership live in Authentik, and the settings page says so instead of offering
+controls that could not work.
+
 **Upgrading from `AUTH_MODE=none`**
 
 That mode is gone; authentication can no longer be switched off. An instance

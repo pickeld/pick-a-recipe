@@ -407,6 +407,105 @@ def get_user_by_sub(sub: str) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+# ===== User Administration =====
+
+def list_users() -> List[Dict[str, Any]]:
+    """Every account, oldest first, without the password hashes.
+
+    Deliberately does not select password_hash: nothing outside authentication
+    needs it, and leaving it out means it cannot be leaked by a caller that
+    forgets to strip it.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT username, email, name, avatar_url, is_admin, created_at,
+                   oidc_sub IS NOT NULL AS is_oidc,
+                   (password_hash IS NOT NULL AND password_hash != '') AS has_password
+            FROM users
+            ORDER BY created_at, id
+        ''')
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def count_admins() -> int:
+    """How many accounts can administer the instance."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM users WHERE is_admin = 1')
+        return cursor.fetchone()[0]
+
+
+def create_local_user(username: str, password_hash: str, *,
+                      is_admin: bool = False) -> Optional[Dict[str, Any]]:
+    """Add a password account. None if the username is already taken.
+
+    Relies on the UNIQUE constraint rather than a check-then-insert, so two
+    concurrent creations cannot both succeed.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                '''INSERT INTO users (username, oidc_sub, email, name, avatar_url,
+                                      is_admin, password_hash)
+                   VALUES (?, NULL, NULL, ?, NULL, ?, ?)''',
+                (username, username, int(is_admin), password_hash),
+            )
+        except sqlite3.IntegrityError:
+            return None
+        conn.commit()
+        return get_user(username)
+
+
+def set_user_admin(username: str, is_admin: bool) -> bool:
+    """Grant or revoke admin rights. False if there is no such account."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE users SET is_admin = ? WHERE username = ?',
+            (int(is_admin), username),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_user(username: str) -> bool:
+    """Remove an account and the work it owns. False if there is no such account.
+
+    Ownership is recorded as the username string, not the row id, so leaving the
+    rows behind would hand them to the next account created with the same name.
+    Queued jobs and pending uploads go with the account; entries in
+    recipe_history do not, because that table has no owner column — extracted
+    recipes belong to the instance and outlive whoever queued them.
+
+    One transaction, so a failure part-way cannot leave an account deleted with
+    its jobs still addressable, or vice versa.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('BEGIN IMMEDIATE')
+        cursor.execute('SELECT 1 FROM users WHERE username = ?', (username,))
+        if cursor.fetchone() is None:
+            conn.rollback()
+            return False
+
+        # Also by job, not just by user_id: an upload created before ownership
+        # was recorded carries a NULL user_id, and leaving it would point at a
+        # job that is about to disappear.
+        cursor.execute(
+            '''DELETE FROM pending_uploads
+               WHERE user_id = ?
+                  OR job_id IN (SELECT id FROM recipe_jobs WHERE user_id = ?)''',
+            (username, username),
+        )
+        cursor.execute('DELETE FROM recipe_jobs WHERE user_id = ?', (username,))
+        cursor.execute('DELETE FROM push_subscriptions WHERE username = ?', (username,))
+        cursor.execute('DELETE FROM users WHERE username = ?', (username,))
+        conn.commit()
+        return True
+
+
 # ===== Config Functions =====
 
 def set_config_value(key: str, value: str) -> bool:

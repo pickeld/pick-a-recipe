@@ -69,7 +69,9 @@ Sign-in is always required. `AUTH_MODE` picks where accounts come from:
 - `local` (default) — username and password accounts stored by this app, hashed
   with Argon2id. No identity provider needed: with no account yet, every page
   redirects to `/setup`, which closes for good once one exists. Only an admin
-  can add further accounts; there is no self-registration.
+  can add further accounts; there is no self-registration. Admins manage accounts
+  from the settings page: add, promote, demote, set a password, delete. You
+  cannot demote yourself or the last admin.
 - `authentik` — Authentik single sign-on (OIDC). Needs `AUTHENTIK_CLIENT_ID` and
   `AUTHENTIK_CLIENT_SECRET`. Password sign-in is refused in this mode.
 
@@ -147,6 +149,14 @@ The UI uses Socket.IO for real-time progress updates. The stages are:
 ## Security Notes
 
 - Authentication cannot be switched off; Settings holds third-party API keys
+- Reading or writing config, importing/exporting settings and uploading cookies
+  require an admin; a plain account gets a 403
+- In `local` mode the session is resolved against the `users` table on every
+  request, so deleting or demoting an account revokes it immediately instead of
+  when its cookie expires
+- Account lifecycle events (creation, deletion, admin changes, password changes,
+  sign-in successes and failures) are logged; usernames rejected if they contain
+  control characters, which would otherwise let one forge log lines
 - Local passwords are Argon2id hashes with a per-account salt, rehashed on login
   when cost parameters change; failed sign-ins are progressively delayed per
   (IP, username) rather than locking the account

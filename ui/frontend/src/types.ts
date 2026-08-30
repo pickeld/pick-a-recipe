@@ -293,11 +293,25 @@ export interface SessionUser {
   user: string
   is_admin: boolean
   auth_mode?: 'local' | 'authentik'
+  /** False under Authentik, where the IdP owns accounts and passwords. */
+  local_auth_enabled?: boolean
   /** Always false now; kept so an older cached bundle still parses a response. */
   auth_disabled?: boolean
   /** Popped server-side from the /share flow; consumed once by Home */
   shared_url?: string | null
   auto_start?: boolean
+}
+
+/** An account as /api/users exposes it. Never carries the password hash. */
+export interface ManagedUser {
+  username: string
+  email?: string | null
+  name?: string | null
+  is_admin: boolean
+  /** Came from the identity provider rather than being created here. */
+  is_oidc: boolean
+  has_password: boolean
+  created_at?: string | null
 }
 
 // ===== Socket.IO events =====

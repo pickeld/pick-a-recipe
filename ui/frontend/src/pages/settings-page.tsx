@@ -13,10 +13,14 @@ import {
   UploadIcon,
   Trash2Icon,
   DownloadIcon,
+  UsersIcon,
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
 import type { AppConfig } from '@/types'
+import { useSession } from '@/hooks/use-session'
+import { AccountCard } from '@/components/settings/account-card'
+import { UsersCard } from '@/components/settings/users-card'
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -81,9 +85,16 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
 
 export function SettingsPage() {
   const queryClient = useQueryClient()
-  const { data: loaded, isLoading } = useQuery({
+  const { data: session, isLoading: sessionLoading } = useSession()
+  const isAdmin = session?.is_admin ?? false
+  const localAuth = session?.local_auth_enabled ?? false
+
+  const { data: loaded, isLoading: configLoading } = useQuery({
     queryKey: ['config'],
     queryFn: () => api.getConfig(),
+    // Instance configuration holds the API keys, so the server refuses it to
+    // non-admins. Not asking avoids a pointless 403 on every visit.
+    enabled: isAdmin,
   })
 
   const { get, set, reset, draft, dirty } = useDraft(loaded)
@@ -174,9 +185,25 @@ export function SettingsPage() {
   const confirmBeforeUpload = get('confirm_before_upload') === 'true'
   const hasCookiesFile = Boolean(loaded?.yt_dlp_cookies_file)
 
-  if (isLoading) {
+  if (sessionLoading || (isAdmin && configLoading)) {
     return (
       <div className="p-6 text-muted-foreground text-sm">Loading settings…</div>
+    )
+  }
+
+  // Non-admins get their own account and nothing else: everything below is
+  // instance-wide, and the server refuses it to them anyway.
+  if (!isAdmin) {
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-6 flex flex-col gap-6">
+        <div>
+          <h1 className="text-xl font-semibold">Settings</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Extraction settings are managed by an administrator.
+          </p>
+        </div>
+        {localAuth && session && <AccountCard username={session.user} />}
+      </div>
     )
   }
 
@@ -604,11 +631,31 @@ export function SettingsPage() {
               className="w-28"
             />
           </Field>
-          <p className="text-xs text-muted-foreground">
-            Sign-in and user access are managed via Authentik single sign-on.
-          </p>
         </CardContent>
       </Card>
+
+      {localAuth && session && (
+        <>
+          <AccountCard username={session.user} />
+          <UsersCard currentUsername={session.user} />
+        </>
+      )}
+
+      {!localAuth && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <UsersIcon className="size-4" />
+              Accounts
+            </CardTitle>
+            <CardDescription>
+              Sign-in, accounts and admin rights come from Authentik. Add or
+              remove people there, and use its groups to decide who administers
+              this instance.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
 
       {/* Backup */}
       <Card>
