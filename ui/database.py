@@ -184,6 +184,21 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mobile_auth_nonces (
+            nonce TEXT PRIMARY KEY,
+            redirect_uri TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            used_at TIMESTAMP
+        )
+    ''')
+    # Nonces are marked used rather than deleted so a replayed state can be
+    # told apart from one that was never issued.
+    try:
+        cursor.execute('ALTER TABLE mobile_auth_nonces ADD COLUMN used_at TIMESTAMP')
+    except sqlite3.OperationalError:
+        pass
+
     # Legacy cleanup: retries used to accumulate one failed row per attempt.
     # Keep the newest failure per URL, then drop failures a success
     # already superseded.
@@ -1292,6 +1307,73 @@ def delete_push_subscription(endpoint: str) -> bool:
         cursor.execute('DELETE FROM push_subscriptions WHERE endpoint = ?', (endpoint,))
         conn.commit()
         return cursor.rowcount > 0
+
+
+# ===== Mobile Auth Nonces (single-use OIDC state for the Android app) =====
+
+def delete_expired_mobile_nonces(replay_grace_hours: int = 24) -> None:
+    """Prune nonces well past expiry.
+
+    Spent nonces are kept for `replay_grace_hours` beyond their expiry so that
+    `mobile_nonce_exists` can still recognise a replay rather than silently
+    treating it as an unknown state.
+    """
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM mobile_auth_nonces WHERE expires_at <= datetime('now', ?)",
+            (f'-{int(replay_grace_hours)} hours',),
+        )
+        conn.commit()
+
+
+def save_mobile_nonce(nonce: str, redirect_uri: str, ttl_minutes: int = 10) -> bool:
+    try:
+        with get_db() as conn:
+            conn.execute(
+                '''INSERT INTO mobile_auth_nonces (nonce, redirect_uri, expires_at)
+                   VALUES (?, ?, datetime('now', ?))''',
+                (nonce, redirect_uri, f'+{int(ttl_minutes)} minutes'),
+            )
+            conn.commit()
+            return True
+    except sqlite3.Error:
+        return False
+
+
+def consume_mobile_nonce(nonce: str) -> Dict[str, Any] | None:
+    """Atomically claim a live, unused nonce; None if unknown/expired/spent.
+
+    The single UPDATE ... RETURNING is what makes the nonce single-use: two
+    concurrent callbacks racing on the same state can never both win.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''UPDATE mobile_auth_nonces
+               SET used_at = CURRENT_TIMESTAMP
+               WHERE nonce = ?
+                 AND used_at IS NULL
+                 AND expires_at > CURRENT_TIMESTAMP
+               RETURNING redirect_uri''',
+            (nonce,),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+        if not row:
+            return None
+        return {'redirect_uri': row[0]}
+
+
+def mobile_nonce_exists(nonce: str) -> bool:
+    """True if this state was ever issued as a mobile nonce, spent or not.
+
+    Lets the callback answer a replayed or expired mobile state with an error
+    instead of falling through to the browser sign-in flow.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1 FROM mobile_auth_nonces WHERE nonce = ?', (nonce,))
+        return cursor.fetchone() is not None
 
 
 # Initialize database on module import

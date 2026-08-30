@@ -7,4 +7,5 @@ flask
 flask-socketio
 google-genai
 authlib
+PyJWT
 beautifulsoup4

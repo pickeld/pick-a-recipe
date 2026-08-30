@@ -72,6 +72,10 @@ Set by `AUTH_MODE`:
   `AUTH_LOCAL_USERNAME`). Convenient for local development, but there is no
   access control whatsoever, so keep it off any untrusted network.
 
+The Android app in `../mobile/` uses JWT bearer tokens instead of cookies,
+enabled by setting `JWT_SECRET_KEY`. Bearer and cookie auth run side by side on
+the existing endpoints, with cookies taking precedence.
+
 See the [root README](../README.md#authentication) for the full setup.
 
 ## Configuration
