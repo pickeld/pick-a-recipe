@@ -153,7 +153,7 @@ def _count_pending_approvals() -> int:
                "AND (expires_at IS NULL OR expires_at > datetime('now'))")
         if not _current_user_is_admin():
             sql += ' AND (user_id IS NULL OR user_id = ?)'
-            params.append(session.get('user'))
+            params.append(_current_username())
         with get_db() as conn:
             return conn.execute(sql, params).fetchone()[0]
     except Exception as exc:
@@ -179,6 +179,21 @@ except Exception as _health_exc:  # never let health checks block startup
 # Initialize job manager (process func registered after definition below)
 job_manager = init_job_manager(socketio)
 
+# ===== Authentication mode =====
+# 'authentik' (default) gates access behind Authentik single sign-on. 'none'
+# turns authentication off and serves every request as one implicit local admin,
+# for self-hosted setups that have no identity provider. Opting out is explicit
+# on purpose: an unauthenticated instance exposes the LLM/Mealie/Tandoor API keys
+# stored in Settings to anyone who can reach the port.
+AUTH_MODE = (os.environ.get('AUTH_MODE') or 'authentik').strip().lower()
+if AUTH_MODE not in ('authentik', 'none'):
+    raise RuntimeError(
+        f"Invalid AUTH_MODE={AUTH_MODE!r}. Use 'authentik' for Authentik single "
+        "sign-on (default), or 'none' to run without authentication."
+    )
+AUTH_DISABLED = AUTH_MODE == 'none'
+LOCAL_USERNAME = (os.environ.get('AUTH_LOCAL_USERNAME') or 'local').strip() or 'local'
+
 # ===== Authentication via Authentik (OIDC) =====
 # Single sign-on through the self-hosted Authentik instance at auth.pickel.me.
 # Access requires membership in AUTHENTIK_USER_GROUP (admins additionally in
@@ -192,7 +207,13 @@ AUTHENTIK_USER_GROUP = os.environ.get('AUTHENTIK_USER_GROUP', 'pick-a-recipe-use
 AUTHENTIK_ADMIN_GROUP = os.environ.get('AUTHENTIK_ADMIN_GROUP', 'admins')
 
 oauth = None
-if os.environ.get('AUTHENTIK_CLIENT_ID') and os.environ.get('AUTHENTIK_CLIENT_SECRET'):
+if AUTH_DISABLED:
+    from database import ensure_local_user
+    ensure_local_user(LOCAL_USERNAME)
+    print(f"[Auth] WARNING: AUTH_MODE=none — authentication is DISABLED. Every "
+          f"request runs as local admin '{LOCAL_USERNAME}'. Only run this on a "
+          f"trusted network; do not expose it to the internet.")
+elif os.environ.get('AUTHENTIK_CLIENT_ID') and os.environ.get('AUTHENTIK_CLIENT_SECRET'):
     from authlib.integrations.flask_client import OAuth
     oauth = OAuth(app)
     oauth.register(
@@ -204,20 +225,44 @@ if os.environ.get('AUTHENTIK_CLIENT_ID') and os.environ.get('AUTHENTIK_CLIENT_SE
     )
 else:
     print('[Auth] WARNING: AUTHENTIK_CLIENT_ID / AUTHENTIK_CLIENT_SECRET are not set — '
-          'sign-in is disabled until Authentik OIDC credentials are configured.')
+          'nobody can sign in. Configure Authentik OIDC, or set AUTH_MODE=none to '
+          'run without authentication.')
 
 
 def _is_logged_in() -> bool:
-    return 'user' in session
+    return AUTH_DISABLED or 'user' in session
 
 
 def _current_user_is_admin() -> bool:
+    if AUTH_DISABLED:
+        return True
     return bool(session.get('is_admin'))
+
+
+def _current_username() -> str | None:
+    """Effective owner for the request, independent of the session cookie.
+
+    WebSocket handlers can run before any HTTP request has seeded the session,
+    so AUTH_MODE=none needs a fallback that does not depend on the cookie.
+    """
+    if AUTH_DISABLED:
+        return session.get('user') or LOCAL_USERNAME
+    return session.get('user')
+
+
+@app.before_request
+def _seed_local_identity():
+    """AUTH_MODE=none has no login flow, so stamp the local identity onto the
+    session that the rest of the app reads for ownership scoping."""
+    if AUTH_DISABLED and session.get('user') != LOCAL_USERNAME:
+        session['user'] = LOCAL_USERNAME
+        session['is_admin'] = True
+        session.permanent = True
 
 
 def _scope() -> tuple[str | None, bool]:
     """Owner scope for the current request: (user_id, is_admin)."""
-    return session.get('user'), _current_user_is_admin()
+    return _current_username(), _current_user_is_admin()
 
 
 def login_required(f):
@@ -248,7 +293,7 @@ def _start_job_for_url(url: str, *, retry_from_history_id: int | None = None,
                        priority: int = 0, user_id: str | None = None) -> dict:
     jm = get_job_manager()
     if user_id is None:
-        user_id = session.get('user')
+        user_id = _current_username()
     job_id = jm.create_new_job(
         url, retry_from_history_id=retry_from_history_id,
         priority=priority, user_id=user_id,
@@ -417,9 +462,12 @@ def _authentik_redirect_uri() -> str:
 @app.route('/auth/login')
 def auth_login():
     """Redirect the user to Authentik for authentication."""
+    if AUTH_DISABLED:
+        return redirect(url_for('index'))
     if oauth is None:
         flash('Single sign-on is not configured. Set AUTHENTIK_CLIENT_ID and '
-              'AUTHENTIK_CLIENT_SECRET to enable sign-in.', 'error')
+              'AUTHENTIK_CLIENT_SECRET, or set AUTH_MODE=none to run without '
+              'authentication.', 'error')
         return redirect(url_for('login'))
     return oauth.authentik.authorize_redirect(_authentik_redirect_uri())
 
@@ -491,6 +539,11 @@ def auth_callback():
 @app.route('/logout')
 def logout():
     """Log out: clear the local session and end the Authentik session."""
+    if AUTH_DISABLED:
+        # Nothing to sign out of; _seed_local_identity would re-create the
+        # session on the next request anyway.
+        return redirect(url_for('index'))
+
     session.pop('user', None)
     session.pop('is_admin', None)
 
@@ -992,6 +1045,7 @@ def api_me():
     return jsonify({
         'user': session['user'],
         'is_admin': bool(session.get('is_admin', False)),
+        'auth_disabled': AUTH_DISABLED,
         'shared_url': session.pop('shared_url', None),
         'auto_start': bool(session.pop('auto_start_extraction', False)),
     })
@@ -999,7 +1053,10 @@ def api_me():
 
 @app.route('/api/auth/status', methods=['GET'])
 def api_auth_status():
-    return jsonify({'sso_enabled': oauth is not None})
+    return jsonify({
+        'sso_enabled': oauth is not None,
+        'auth_disabled': AUTH_DISABLED,
+    })
 
 
 @app.route('/api/config', methods=['GET'])
@@ -1495,7 +1552,7 @@ def process_video_job(job_id, jm):
 def handle_connect():
     if not _socketio_authenticated():
         return False
-    join_room(f"user_{session['user']}")
+    join_room(f"user_{_current_username()}")
     emit('connected', {'status': 'Connected to server'})
 
 
@@ -1505,7 +1562,7 @@ def handle_subscribe_job(data):
         return False
     job_id = data.get('job_id')
     if job_id:
-        user_id, is_admin = session.get('user'), _current_user_is_admin()
+        user_id, is_admin = _scope()
         job = get_job(job_id, user_id=user_id, is_admin=is_admin)
         if not job:
             emit('error', {'message': 'Job not found'})
@@ -1532,7 +1589,7 @@ def handle_confirm_upload(data):
     selected_image_index = data.get('selected_image_index')
     if not upload_id:
         return
-    user_id, is_admin = session.get('user'), _current_user_is_admin()
+    user_id, is_admin = _scope()
     upload = get_pending_upload(upload_id, user_id=user_id, is_admin=is_admin)
     if not upload:
         emit('error', {'message': 'Pending upload not found'})
@@ -1547,7 +1604,7 @@ def handle_cancel_upload(data):
     upload_id = data.get('upload_id')
     if not upload_id:
         return
-    user_id, is_admin = session.get('user'), _current_user_is_admin()
+    user_id, is_admin = _scope()
     upload = get_pending_upload(upload_id, user_id=user_id, is_admin=is_admin)
     if not upload:
         emit('error', {'message': 'Pending upload not found'})

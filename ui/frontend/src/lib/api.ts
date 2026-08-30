@@ -255,5 +255,6 @@ export const api = {
   me: () => request<import('@/types').SessionUser>('/api/me'),
 
   // ===== Auth =====
-  authStatus: () => request<{ sso_enabled: boolean }>('/api/auth/status'),
+  authStatus: () =>
+    request<{ sso_enabled: boolean; auth_disabled: boolean }>('/api/auth/status'),
 }

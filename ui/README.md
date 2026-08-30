@@ -4,7 +4,7 @@ A modern web interface for the Pick-a-Recipe video recipe extractor.
 
 ## Features
 
-- 🔐 **Authentik SSO (OIDC)** — no local passwords
+- 🔐 **Authentik SSO (OIDC)** — no local passwords, or `AUTH_MODE=none` to run without sign-in
 - 📹 **URL Input** - Paste video URLs from TikTok, YouTube, Instagram, etc.
 - 📊 **Real-time Progress** - Watch the extraction process with live updates
 - ⚙️ **Configuration Management** - Save all settings through the web interface
@@ -62,12 +62,17 @@ Or run via Docker:
 docker run -d -p 5006:5006 -v pick-a-recipe-data:/app/data pickeld/pick-a-recipe:latest
 ```
 
-## Default Login
+## Authentication
 
-- **Username:** `admin`
-- **Password:** `admin123`
+Set by `AUTH_MODE`:
 
-⚠️ **Important:** Change the default password after first login!
+- `authentik` (default) — sign-in required via Authentik single sign-on (OIDC).
+  Needs `AUTHENTIK_CLIENT_ID` and `AUTHENTIK_CLIENT_SECRET`.
+- `none` — no sign-in; every request runs as one local admin (`local`, or
+  `AUTH_LOCAL_USERNAME`). Convenient for local development, but there is no
+  access control whatsoever, so keep it off any untrusted network.
+
+See the [root README](../README.md#authentication) for the full setup.
 
 ## Configuration
 
@@ -134,5 +139,6 @@ The UI uses Socket.IO for real-time progress updates. The stages are:
 
 - Authentication is delegated to Authentik single sign-on (OIDC) — no local passwords
 - Access requires membership in the configured Authentik user group; admin features require the admin group
+- `AUTH_MODE=none` disables authentication entirely and must only be used on a trusted network
 - Session management uses Flask's secure sessions
 - API keys are stored in the local configuration file

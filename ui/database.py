@@ -252,6 +252,34 @@ def upsert_oidc_user(
         return get_user(final_username)
 
 
+def ensure_local_user(username: str, *, is_admin: bool = True) -> Dict[str, Any]:
+    """Create or return the built-in account used when AUTH_MODE=none.
+
+    Carries no OIDC subject, so enabling Authentik later cannot collide with it:
+    `upsert_oidc_user` only ever matches rows by `oidc_sub`.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+        row = cursor.fetchone()
+        if row:
+            if bool(row['is_admin']) != is_admin:
+                cursor.execute(
+                    'UPDATE users SET is_admin = ? WHERE id = ?',
+                    (int(is_admin), row['id']),
+                )
+                conn.commit()
+            return get_user(username)
+
+        cursor.execute(
+            '''INSERT INTO users (username, oidc_sub, email, name, avatar_url, is_admin)
+               VALUES (?, NULL, NULL, ?, NULL, ?)''',
+            (username, username, int(is_admin)),
+        )
+        conn.commit()
+        return get_user(username)
+
+
 def get_user(username: str) -> Optional[Dict[str, Any]]:
     """Get user record by username."""
     with get_db() as conn:
