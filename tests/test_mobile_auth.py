@@ -193,6 +193,41 @@ class TestMobileCallback(MobileAuthTestCase):
         self.assertIsNotNone(self.mobile_auth.decode_token(claims['access_token'][0], expected_type='access'))
         self.assertIsNotNone(self.mobile_auth.decode_token(claims['refresh_token'][0], expected_type='refresh'))
 
+    def test_idp_error_travels_back_over_the_deep_link(self):
+        """An error during app sign-in must not land on the web login page.
+
+        Redirecting to /login would leave the user stranded in a browser while
+        the app waits indefinitely, having been told nothing.
+        """
+        client = self._client()
+        nonce = self._save_nonce()
+        resp = client.get(f'/auth/callback?error=access_denied&state={nonce}')
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(
+            resp.headers['Location'],
+            'par://auth/callback#error=access_denied',
+        )
+
+    def test_unrecognised_idp_error_is_not_reflected(self):
+        """Only RFC 6749 codes pass through; anything else is reported generically."""
+        client = self._client()
+        nonce = self._save_nonce()
+        resp = client.get(
+            f'/auth/callback?error=%3Cscript%3Ealert(1)%3C/script%3E&state={nonce}'
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(
+            resp.headers['Location'],
+            'par://auth/callback#error=server_error',
+        )
+
+    def test_web_flow_errors_still_flash_and_redirect(self):
+        """The browser flow keeps its existing behaviour when there is no nonce."""
+        client = self._client()
+        resp = client.get('/auth/callback?error=access_denied&state=not-a-nonce')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.headers['Location'])
+
     def test_nonce_is_single_use(self):
         client = self._client()
         nonce = self._save_nonce()
