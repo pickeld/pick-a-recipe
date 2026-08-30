@@ -60,6 +60,13 @@ android {
     }
 }
 
+dependencies {
+    // Required whenever isCoreLibraryDesugaringEnabled is true; without it AGP
+    // fails to configure :app:l8DexDesugarLibDebug. Version pinned, resolved
+    // from google() as declared in settings.gradle.kts.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
