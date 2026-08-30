@@ -20,6 +20,9 @@ sys.path.insert(0, os.path.join(ROOT, 'ui'))
 
 _test_dir = tempfile.mkdtemp()
 os.environ['DATA_DIR'] = _test_dir
+# These characterize the OIDC cookie-session path, so pin the mode rather than
+# inheriting a default. In local mode a fresh instance sends /login to /setup.
+os.environ['AUTH_MODE'] = 'authentik'
 
 
 class TestBaselineHttpAuth(unittest.TestCase):

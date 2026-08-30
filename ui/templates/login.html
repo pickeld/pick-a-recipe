@@ -11,7 +11,23 @@
             <p>Extract recipes from social media videos</p>
         </div>
 
-        {% if sso_enabled %}
+        {% if local_auth %}
+        <form method="post" action="{{ url_for('auth_local_login') }}" class="login-form">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" autocomplete="username"
+                       autocapitalize="none" spellcheck="false" required autofocus>
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password"
+                       autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">
+                <i class="fas fa-right-to-bracket"></i> Sign in
+            </button>
+        </form>
+        {% elif sso_enabled %}
         <a href="{{ url_for('auth_login') }}" class="btn btn-primary btn-block" style="display:flex; align-items:center; justify-content:center; gap:0.5rem;">
             <i class="fas fa-fingerprint"></i> Sign in with Authentik
         </a>
@@ -20,7 +36,7 @@
             <i class="fas fa-triangle-exclamation"></i>
             Single sign-on is not configured on this server. Set
             <code>AUTHENTIK_CLIENT_ID</code> and <code>AUTHENTIK_CLIENT_SECRET</code>,
-            or set <code>AUTH_MODE=none</code> to run without authentication.
+            or drop <code>AUTH_MODE</code> to use local accounts instead.
         </p>
         {% endif %}
 

@@ -17,9 +17,9 @@ export class ApiError extends Error {
 
 async function request<T>(
   path: string,
-  init?: RequestInit & { json?: unknown },
+  init?: RequestInit & { json?: unknown; handle401?: boolean },
 ): Promise<T> {
-  const { json, ...rest } = init ?? {}
+  const { json, handle401, ...rest } = init ?? {}
   const res = await fetch(path, {
     credentials: 'same-origin',
     ...rest,
@@ -30,7 +30,10 @@ async function request<T>(
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   })
 
-  if (res.status === 401) {
+  // handle401 opts out of the redirect. The sign-in call needs to: a 401 there
+  // means the password was wrong, and bouncing to /login would reload the page
+  // and discard the message explaining why.
+  if (res.status === 401 && !handle401) {
     // Session expired / not logged in → let the server-rendered login take over
     window.location.href = '/login'
     throw new ApiError(401, 'Not authenticated')
@@ -256,5 +259,19 @@ export const api = {
 
   // ===== Auth =====
   authStatus: () =>
-    request<{ sso_enabled: boolean; auth_disabled: boolean }>('/api/auth/status'),
+    request<{
+      auth_mode: 'local' | 'authentik'
+      local_auth_enabled: boolean
+      sso_enabled: boolean
+      setup_required: boolean
+      mobile_auth_enabled: boolean
+      auth_disabled: boolean
+    }>('/api/auth/status'),
+
+  localLogin: (username: string, password: string) =>
+    request<{ user: string; is_admin: boolean }>('/auth/local/login', {
+      method: 'POST',
+      json: { username, password },
+      handle401: true,
+    }),
 }

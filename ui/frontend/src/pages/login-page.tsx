@@ -4,6 +4,7 @@ import { ChefHat, Download, TriangleAlert } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<{ outcome: 'accepted' | 'dismissed' }>
@@ -47,6 +48,75 @@ function useInstallPrompt() {
   return { showInstall, install }
 }
 
+function PasswordForm() {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  const onSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setError(null)
+    setSubmitting(true)
+    try {
+      await api.localLogin(username, password)
+      // Full reload rather than client-side navigation: the session cookie is
+      // new, and every cached query was populated while signed out.
+      window.location.href = '/'
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign-in failed.')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-3">
+      {error && (
+        <div
+          role="alert"
+          className="flex gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive dark:border-destructive/30 dark:bg-destructive/20"
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="username" className="text-sm font-medium text-foreground">
+          Username
+        </label>
+        <Input
+          id="username"
+          name="username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+          required
+          autoFocus
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="password" className="text-sm font-medium text-foreground">
+          Password
+        </label>
+        <Input
+          id="password"
+          name="password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          autoComplete="current-password"
+          required
+        />
+      </div>
+      <Button type="submit" size="lg" className="w-full" disabled={submitting}>
+        {submitting ? 'Signing in…' : 'Sign in'}
+      </Button>
+    </form>
+  )
+}
+
 export function LoginPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['authStatus'],
@@ -57,6 +127,15 @@ export function LoginPage() {
   const { showInstall, install } = useInstallPrompt()
 
   const ssoEnabled = data?.sso_enabled ?? true
+  const localAuth = data?.local_auth_enabled ?? false
+
+  // A fresh instance has no account yet; the server-rendered setup page is the
+  // only thing that can create one.
+  useEffect(() => {
+    if (data?.setup_required) {
+      window.location.href = '/setup'
+    }
+  }, [data?.setup_required])
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-4">
@@ -79,6 +158,8 @@ export function LoginPage() {
           <CardContent className="flex flex-col gap-3 pt-4">
             {isLoading ? (
               <div className="h-9 w-full animate-pulse rounded-lg bg-muted" />
+            ) : localAuth ? (
+              <PasswordForm />
             ) : ssoEnabled ? (
               <Button asChild size="lg" className="w-full">
                 <a href="/auth/login">Sign in with Authentik</a>
@@ -98,11 +179,11 @@ export function LoginPage() {
                   <code className="rounded bg-destructive/15 px-1 font-mono text-xs">
                     AUTHENTIK_CLIENT_SECRET
                   </code>
-                  , or set{' '}
+                  , or drop{' '}
                   <code className="rounded bg-destructive/15 px-1 font-mono text-xs">
-                    AUTH_MODE=none
+                    AUTH_MODE
                   </code>{' '}
-                  to run without authentication.
+                  to use local accounts instead.
                 </span>
               </div>
             )}

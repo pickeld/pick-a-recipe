@@ -8,4 +8,5 @@ flask-socketio
 google-genai
 authlib
 PyJWT
+argon2-cffi
 beautifulsoup4

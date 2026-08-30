@@ -51,6 +51,7 @@ def init_db():
                 name TEXT,
                 avatar_url TEXT,
                 is_admin INTEGER DEFAULT 0,
+                password_hash TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -142,15 +143,18 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Apply incremental schema migrations for existing databases."""
     cursor = conn.cursor()
 
-    # Legacy local-auth schema detected: rebuild the users table for OIDC-only
-    # auth. Previously created local/Google accounts are discarded (fresh
-    # start); job history and configuration are preserved.
-    cursor.execute('PRAGMA table_info(users)')
-    columns = {row[1] for row in cursor.fetchall()}
-    if columns and 'password_hash' in columns:
-        print('[DB] Rebuilding users table for OIDC-only auth (legacy local accounts removed)')
-        cursor.execute('DROP TABLE users')
-        conn.commit()
+    # Local password accounts live alongside OIDC ones, so a user row may carry
+    # a password_hash, an oidc_sub, or both. Nullable: OIDC users never get one.
+    #
+    # A previous migration dropped the whole users table on sight of this
+    # column, from when local accounts were being retired in favour of
+    # OIDC-only auth. It must not come back: _migrate_schema runs on every
+    # boot, so it would wipe accounts on restart and orphan the user_id
+    # ownership recorded against every job and upload.
+    try:
+        cursor.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
+    except sqlite3.OperationalError:
+        pass
 
     job_columns = {
         'retry_from_history_id': 'INTEGER',
@@ -268,10 +272,11 @@ def upsert_oidc_user(
 
 
 def ensure_local_user(username: str, *, is_admin: bool = True) -> Dict[str, Any]:
-    """Create or return the built-in account used when AUTH_MODE=none.
+    """Create or return a local account, without setting a password.
 
     Carries no OIDC subject, so enabling Authentik later cannot collide with it:
-    `upsert_oidc_user` only ever matches rows by `oidc_sub`.
+    `upsert_oidc_user` only ever matches rows by `oidc_sub`. An account left
+    without a password cannot be signed into; `set_user_password` completes it.
     """
     with get_db() as conn:
         cursor = conn.cursor()
@@ -293,6 +298,95 @@ def ensure_local_user(username: str, *, is_admin: bool = True) -> Dict[str, Any]
         )
         conn.commit()
         return get_user(username)
+
+
+def local_account_exists() -> bool:
+    """True once any account has a password set.
+
+    Drives first-run setup: while this is False in local mode, the instance has
+    no way for anyone to sign in, so the setup page is open. Once it is True the
+    setup page closes permanently.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM users WHERE password_hash IS NOT NULL "
+            "AND password_hash != '' LIMIT 1"
+        )
+        return cursor.fetchone() is not None
+
+
+def sole_passwordless_username() -> Optional[str]:
+    """Username of the only account, when it has no password yet.
+
+    Identifies the implicit account that AUTH_MODE=none used to seed, so setup
+    can offer its name. Job and upload ownership is recorded as the username
+    string rather than the row id, so keeping that name is what keeps the
+    history attached — renaming the row would orphan it. Returns None as soon
+    as there is more than one account, since then there is nothing obvious to
+    adopt.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT username, password_hash FROM users LIMIT 2')
+        rows = cursor.fetchall()
+        if len(rows) != 1 or rows[0]['password_hash']:
+            return None
+        return rows[0]['username']
+
+
+def claim_first_local_admin(username: str, password_hash: str) -> Optional[Dict[str, Any]]:
+    """Create the first password account, or adopt a passwordless one.
+
+    Returns None if another request got there first. The guard and the write
+    share one transaction and the check is re-run inside it, so two concurrent
+    setup submissions cannot both succeed — whoever loses gets None rather than
+    silently overwriting the winner's password.
+
+    Adoption matters for instances upgrading from AUTH_MODE=none: that mode
+    seeded a passwordless row, and every job and upload records ownership
+    against its username. Reusing the row keeps that history attached to the
+    account instead of orphaning it under a new name.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('BEGIN IMMEDIATE')
+        cursor.execute(
+            "SELECT 1 FROM users WHERE password_hash IS NOT NULL "
+            "AND password_hash != '' LIMIT 1"
+        )
+        if cursor.fetchone() is not None:
+            conn.rollback()
+            return None
+
+        cursor.execute('SELECT id FROM users WHERE username = ?', (username,))
+        row = cursor.fetchone()
+        if row:
+            cursor.execute(
+                'UPDATE users SET password_hash = ?, is_admin = 1 WHERE id = ?',
+                (password_hash, row['id']),
+            )
+        else:
+            cursor.execute(
+                '''INSERT INTO users (username, oidc_sub, email, name, avatar_url,
+                                      is_admin, password_hash)
+                   VALUES (?, NULL, NULL, ?, NULL, 1, ?)''',
+                (username, username, password_hash),
+            )
+        conn.commit()
+        return get_user(username)
+
+
+def set_user_password(username: str, password_hash: str) -> bool:
+    """Store a new password hash for an existing account."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE users SET password_hash = ? WHERE username = ?',
+            (password_hash, username),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def get_user(username: str) -> Optional[Dict[str, Any]]:

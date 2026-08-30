@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Set up - Pick-a-Recipe{% endblock %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card">
+        <div class="login-header">
+            <img src="{{ url_for('static', filename='icons/icon-192x192.png') }}" alt="Pick-a-Recipe" class="logo-image">
+            <h1>Welcome</h1>
+            <p>Create the administrator account for this instance</p>
+        </div>
+
+        {% if error %}
+        <p class="form-hint" style="text-align:center; color:var(--color-danger, #b00020);">
+            <i class="fas fa-triangle-exclamation"></i> {{ error }}
+        </p>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('setup') }}" class="login-form">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" autocomplete="username"
+                       autocapitalize="none" spellcheck="false"
+                       value="{{ suggested_username }}" required autofocus>
+                {% if adopting %}
+                <small class="form-hint">This instance already has recipes saved
+                    under <strong>{{ adopting }}</strong>. Keep that name to carry
+                    them over; a different one starts with an empty history.</small>
+                {% endif %}
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password"
+                       autocomplete="new-password" minlength="10" required>
+                <small class="form-hint">At least 10 characters. Length matters more
+                    than symbols, so a memorable phrase works well.</small>
+            </div>
+            <div class="form-group">
+                <label for="confirm_password">Confirm password</label>
+                <input type="password" id="confirm_password" name="confirm_password"
+                       autocomplete="new-password" minlength="10" required>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">
+                <i class="fas fa-user-shield"></i> Create account
+            </button>
+        </form>
+
+        <p class="form-hint" style="text-align:center; margin-top:1rem;">
+            This page closes as soon as an account exists. If you did not open it
+            yourself, create the account now to stop someone else claiming it.
+        </p>
+    </div>
+</div>
+{% endblock %}
