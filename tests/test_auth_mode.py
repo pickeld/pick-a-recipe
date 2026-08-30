@@ -1,4 +1,4 @@
-"""Tests for AUTH_MODE — running with and without Authentik SSO (issue #13).
+"""Tests for AUTH_MODE — local password accounts versus Authentik SSO.
 
 Each scenario runs in its own subprocess: AUTH_MODE is read once when `app` is
 imported, so two modes cannot coexist in a single interpreter. Isolation also
@@ -6,190 +6,194 @@ keeps these tests from dictating import order for anything else that imports
 the Flask app.
 """
 
-import json
-import os
-import subprocess
-import sys
-import tempfile
-import textwrap
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from app_harness import result as _result, run as _run
 
 
-def _run(script: str, **env_overrides) -> subprocess.CompletedProcess:
-    """Run `script` against a fresh app import and isolated DATA_DIR."""
-    env = os.environ.copy()
-    env['DATA_DIR'] = tempfile.mkdtemp()
-    # Never inherit the developer's real SSO config.
-    for key in ('AUTH_MODE', 'AUTH_LOCAL_USERNAME',
-                'AUTHENTIK_CLIENT_ID', 'AUTHENTIK_CLIENT_SECRET'):
-        env.pop(key, None)
-    env.update(env_overrides)
+class TestDefaultModeIsLocal(unittest.TestCase):
+    """A container started with no configuration must be usable, and closed.
 
-    preamble = textwrap.dedent(f"""
-        import json, sys
-        sys.path.insert(0, {ROOT!r})
-        sys.path.insert(0, {os.path.join(ROOT, 'ui')!r})
-
-        def emit(**kw):
-            print('__RESULT__' + json.dumps(kw))
-    """)
-    return subprocess.run(
-        [sys.executable, '-c', preamble + textwrap.dedent(script)],
-        capture_output=True, text=True, env=env, cwd=ROOT, timeout=180,
-    )
-
-
-def _result(proc: subprocess.CompletedProcess) -> dict:
-    for line in proc.stdout.splitlines():
-        if line.startswith('__RESULT__'):
-            return json.loads(line[len('__RESULT__'):])
-    raise AssertionError(
-        f'no result emitted (exit={proc.returncode})\n'
-        f'--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}'
-    )
-
-
-class TestAuthModeNone(unittest.TestCase):
-    """AUTH_MODE=none must make the app usable with no identity provider."""
+    This is the issue #13 requirement: no identity provider needed. It is met by
+    local accounts rather than by disabling authentication, so the instance is
+    never open to whoever reaches the port.
+    """
 
     @classmethod
     def setUpClass(cls):
         proc = _run("""
-            from app import app
+            from app import app, AUTH_MODE, LOCAL_AUTH
             app.config['TESTING'] = True
             client = app.test_client()
 
             jobs = client.get('/api/jobs')
-            me = client.get('/api/me')
             status = client.get('/api/auth/status')
             login = client.get('/login')
-            logout = client.get('/logout')
-            sso = client.get('/auth/login')
+            setup = client.get('/setup')
 
             emit(
+                auth_mode=AUTH_MODE,
+                local_auth=LOCAL_AUTH,
                 jobs_status=jobs.status_code,
-                me_status=me.status_code,
-                me=me.get_json(),
                 auth_status=status.get_json(),
                 login_status=login.status_code,
                 login_location=login.headers.get('Location'),
-                logout_status=logout.status_code,
-                logout_location=logout.headers.get('Location'),
-                sso_status=sso.status_code,
-                sso_location=sso.headers.get('Location'),
+                setup_status=setup.status_code,
             )
-        """, AUTH_MODE='none')
+        """)
+        cls.proc = proc
         cls.res = _result(proc)
 
-    def test_protected_api_reachable_without_login(self):
-        self.assertEqual(self.res['jobs_status'], 200)
+    def test_local_is_the_default_mode(self):
+        self.assertEqual(self.res['auth_mode'], 'local')
+        self.assertTrue(self.res['local_auth'])
 
-    def test_requests_run_as_local_admin(self):
-        self.assertEqual(self.res['me_status'], 200)
-        self.assertEqual(self.res['me']['user'], 'local')
-        self.assertTrue(self.res['me']['is_admin'])
-        self.assertTrue(self.res['me']['auth_disabled'])
+    def test_api_still_requires_authentication(self):
+        """No mode leaves the API open; Settings holds third-party API keys."""
+        self.assertEqual(self.res['jobs_status'], 401)
 
-    def test_auth_status_reports_disabled(self):
-        self.assertFalse(self.res['auth_status']['sso_enabled'])
-        self.assertTrue(self.res['auth_status']['auth_disabled'])
+    def test_status_advertises_mode_and_setup(self):
+        status = self.res['auth_status']
+        self.assertEqual(status['auth_mode'], 'local')
+        self.assertTrue(status['local_auth_enabled'])
+        self.assertTrue(status['setup_required'])
+        self.assertFalse(status['sso_enabled'])
+        self.assertFalse(status['auth_disabled'])
 
-    def test_login_page_redirects_to_app(self):
+    def test_login_sends_a_fresh_instance_to_setup(self):
         self.assertEqual(self.res['login_status'], 302)
-        self.assertEqual(self.res['login_location'], '/')
+        self.assertIn('/setup', self.res['login_location'])
 
-    def test_logout_is_a_noop_redirect(self):
-        self.assertEqual(self.res['logout_status'], 302)
-        self.assertEqual(self.res['logout_location'], '/')
-
-    def test_sso_entrypoint_redirects_instead_of_erroring(self):
-        self.assertEqual(self.res['sso_status'], 302)
-        self.assertEqual(self.res['sso_location'], '/')
+    def test_setup_page_is_reachable(self):
+        self.assertEqual(self.res['setup_status'], 200)
 
 
-class TestAuthModeNoneLocalUser(unittest.TestCase):
-    def test_local_username_is_configurable_and_persisted(self):
-        proc = _run("""
-            from app import app
-            from database import get_user
-            app.config['TESTING'] = True
-            row = get_user('chef')
-            me = app.test_client().get('/api/me').get_json()
-            emit(
-                user_row_exists=row is not None,
-                user_row_is_admin=bool(row and row['is_admin']),
-                user_row_has_no_oidc_sub=bool(row and row['oidc_sub'] is None),
-                me_user=me['user'],
-            )
-        """, AUTH_MODE='none', AUTH_LOCAL_USERNAME='chef')
-        res = _result(proc)
-        self.assertTrue(res['user_row_exists'])
-        self.assertTrue(res['user_row_is_admin'])
-        self.assertTrue(res['user_row_has_no_oidc_sub'])
-        self.assertEqual(res['me_user'], 'chef')
+class TestAuthModeNoneIsMigrated(unittest.TestCase):
+    """AUTH_MODE=none is gone, but deployments still carrying it must boot.
 
-
-class TestDefaultModeStillProtected(unittest.TestCase):
-    """Regression guard: the default must never fall open (issue #13 fix)."""
+    They land on setup, and setup adopts the passwordless account that mode
+    created so its job history stays attached to the same username.
+    """
 
     @classmethod
     def setUpClass(cls):
         proc = _run("""
-            from app import app
+            import database
+            from app import app, AUTH_MODE
+
+            # Stand in for an instance that previously ran AUTH_MODE=none: the
+            # account exists with no password, and owns a job.
+            database.ensure_local_user('local')
+
+            app.config['TESTING'] = True
+            client = app.test_client()
+            status = client.get('/api/auth/status')
+
+            created = client.post('/setup', data={
+                'username': 'local',
+                'password': 'correct horse battery',
+                'confirm_password': 'correct horse battery',
+            })
+            row = database.get_user('local')
+            users = database.get_db_user_count() if hasattr(
+                database, 'get_db_user_count') else None
+
+            emit(
+                auth_mode=AUTH_MODE,
+                setup_required=status.get_json()['setup_required'],
+                setup_status=created.status_code,
+                adopted_has_password=bool(row and row.get('password_hash')),
+                adopted_is_admin=bool(row and row['is_admin']),
+                adopted_has_no_oidc_sub=(row or {}).get('oidc_sub') is None,
+            )
+        """, AUTH_MODE='none')
+        cls.proc = proc
+        cls.res = _result(proc)
+
+    def test_none_is_accepted_and_treated_as_local(self):
+        self.assertEqual(self.res['auth_mode'], 'local')
+
+    def test_it_warns_rather_than_failing_to_boot(self):
+        self.assertIn('AUTH_MODE=none is no longer supported', self.proc.stdout)
+
+    def test_the_instance_needs_setup(self):
+        self.assertTrue(self.res['setup_required'])
+
+    def test_setup_adopts_the_existing_account(self):
+        """Reusing the row keeps history attached; a new username would orphan it."""
+        self.assertEqual(self.res['setup_status'], 302)
+        self.assertTrue(self.res['adopted_has_password'])
+        self.assertTrue(self.res['adopted_is_admin'])
+        self.assertTrue(self.res['adopted_has_no_oidc_sub'])
+
+
+class TestAuthentikMode(unittest.TestCase):
+    """AUTH_MODE=authentik keeps the SSO-only behaviour."""
+
+    @classmethod
+    def setUpClass(cls):
+        proc = _run("""
+            from app import app, AUTH_MODE, LOCAL_AUTH
             app.config['TESTING'] = True
             client = app.test_client()
 
-            jobs = client.get('/api/jobs')
-            login = client.get('/login')
             status = client.get('/api/auth/status')
-
-            authed = app.test_client()
-            with authed.session_transaction() as sess:
-                sess['user'] = 'someone'
-                sess['is_admin'] = False
+            jobs = client.get('/api/jobs')
+            form_login = client.post('/auth/local/login', data={
+                'username': 'someone', 'password': 'whatever-they-typed',
+            })
+            json_login = client.post('/auth/local/login', json={
+                'username': 'someone', 'password': 'whatever-they-typed',
+            })
+            after = client.get('/api/jobs')
 
             emit(
-                jobs_status=jobs.status_code,
-                jobs_body=jobs.get_json(),
-                login_status=login.status_code,
+                auth_mode=AUTH_MODE,
+                local_auth=LOCAL_AUTH,
                 auth_status=status.get_json(),
-                authed_jobs_status=authed.get('/api/jobs').status_code,
+                jobs_status=jobs.status_code,
+                form_login_status=form_login.status_code,
+                form_login_location=form_login.headers.get('Location'),
+                json_login_status=json_login.status_code,
+                still_unauthenticated=after.status_code,
             )
-        """)
+        """, AUTH_MODE='authentik',
+             AUTHENTIK_CLIENT_ID='cid', AUTHENTIK_CLIENT_SECRET='secret')
         cls.res = _result(proc)
 
-    def test_protected_api_still_401_without_session(self):
+    def test_mode_reported(self):
+        self.assertEqual(self.res['auth_mode'], 'authentik')
+        self.assertFalse(self.res['local_auth'])
+
+    def test_no_setup_needed(self):
+        """Accounts arrive from the provider, so there is nothing to bootstrap."""
+        status = self.res['auth_status']
+        self.assertFalse(status['setup_required'])
+        self.assertFalse(status['local_auth_enabled'])
+        self.assertTrue(status['sso_enabled'])
+
+    def test_api_protected(self):
         self.assertEqual(self.res['jobs_status'], 401)
-        self.assertEqual(self.res['jobs_body']['error'], 'Authentication required')
 
-    def test_cookie_session_still_authenticates(self):
-        self.assertEqual(self.res['authed_jobs_status'], 200)
-
-    def test_login_page_served_so_the_error_is_visible(self):
-        self.assertEqual(self.res['login_status'], 200)
-
-    def test_auth_status_reports_enabled_mode(self):
-        self.assertFalse(self.res['auth_status']['sso_enabled'])
-        self.assertFalse(self.res['auth_status']['auth_disabled'])
+    def test_password_login_is_refused(self):
+        """Otherwise SSO could be bypassed by any account holding a password."""
+        # A browser gets sent back to the login page; the SPA gets a status.
+        self.assertEqual(self.res['form_login_status'], 302)
+        self.assertIn('/login', self.res['form_login_location'])
+        self.assertEqual(self.res['json_login_status'], 400)
+        # Above all: no session was established either way.
+        self.assertEqual(self.res['still_unauthenticated'], 401)
 
 
 class TestInvalidAuthMode(unittest.TestCase):
-    def test_typo_fails_fast_instead_of_falling_open(self):
+    def test_unknown_mode_fails_loudly_at_boot(self):
         proc = _run("""
-            try:
-                import app
-            except RuntimeError as exc:
-                emit(error=str(exc))
-            else:
-                emit(error=None)
+            import app  # noqa: F401
+            emit(ok=True)
         """, AUTH_MODE='disabled')
-        res = _result(proc)
-        self.assertIsNotNone(
-            res['error'], 'an unrecognised AUTH_MODE must not boot the app'
-        )
-        self.assertIn('AUTH_MODE', res['error'])
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('AUTH_MODE', proc.stderr)
+        self.assertIn('local', proc.stderr)
 
 
 if __name__ == '__main__':

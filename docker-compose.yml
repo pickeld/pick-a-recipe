@@ -13,12 +13,11 @@ services:
       - HOST=0.0.0.0
       - PORT=5006
       - FLASK_SECRET_KEY=change-me-to-a-random-secret-key
-      # No identity provider in this quickstart, so authentication is off and
-      # everything runs as a single local admin. Keep this on a trusted network:
-      # anyone who can reach the port can read the API keys stored in Settings.
-      # To require sign-in instead, drop AUTH_MODE and set AUTHENTIK_CLIENT_ID /
-      # AUTHENTIK_CLIENT_SECRET (see README → Authentication).
-      - AUTH_MODE=none
+      # Authentication defaults to local accounts stored by this app. The first
+      # visit lands on /setup to create the admin account; that page closes for
+      # good once an account exists, so create it before exposing the port.
+      # For Authentik single sign-on instead, set AUTH_MODE=authentik plus
+      # AUTHENTIK_CLIENT_ID / AUTHENTIK_CLIENT_SECRET (README → Authentication).
     volumes:
       - pick-a-recipe:/app/data
       - pick-a-recipe:/tmp

@@ -22,9 +22,13 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
 import mobile_auth
+import passwords
+import login_throttle
 from database import (
     init_db, load_config, save_config,
     get_user, upsert_oidc_user,
+    local_account_exists, claim_first_local_admin, set_user_password,
+    sole_passwordless_username,
     get_history, get_history_entry, get_history_count, delete_history_entry,
     delete_history_entries_bulk, delete_job_entry, delete_jobs_bulk,
     get_combined_history_and_jobs, get_combined_history_and_jobs_count,
@@ -186,19 +190,39 @@ except Exception as _health_exc:  # never let health checks block startup
 job_manager = init_job_manager(socketio)
 
 # ===== Authentication mode =====
-# 'authentik' (default) gates access behind Authentik single sign-on. 'none'
-# turns authentication off and serves every request as one implicit local admin,
-# for self-hosted setups that have no identity provider. Opting out is explicit
-# on purpose: an unauthenticated instance exposes the LLM/Mealie/Tandoor API keys
-# stored in Settings to anyone who can reach the port.
-AUTH_MODE = (os.environ.get('AUTH_MODE') or 'authentik').strip().lower()
-if AUTH_MODE not in ('authentik', 'none'):
+# 'local' (default) keeps username and password accounts in this app's own
+# database, so a fresh container works with no configuration beyond choosing a
+# password on first run. 'authentik' delegates to Authentik single sign-on.
+#
+# There is no way to turn authentication off. Settings holds the LLM, Mealie and
+# Tandoor API keys, so an open instance hands those to anyone who can reach the
+# port.
+_DEFAULT_LOCAL_USERNAME = 'admin'
+AUTH_MODE = (os.environ.get('AUTH_MODE') or 'local').strip().lower()
+
+if AUTH_MODE == 'none':
+    # Accepted rather than rejected so existing deployments still boot. They
+    # land on first-run setup, which adopts the passwordless account that this
+    # mode created and keeps its job history attached.
+    print("[Auth] WARNING: AUTH_MODE=none is no longer supported and has been "
+          "treated as AUTH_MODE=local. Authentication is now always on. Open "
+          "the app to set a password for the existing account; its history is "
+          "preserved. Update your configuration to AUTH_MODE=local.")
+    AUTH_MODE = 'local'
+
+if AUTH_MODE not in ('local', 'authentik'):
     raise RuntimeError(
-        f"Invalid AUTH_MODE={AUTH_MODE!r}. Use 'authentik' for Authentik single "
-        "sign-on (default), or 'none' to run without authentication."
+        f"Invalid AUTH_MODE={AUTH_MODE!r}. Use 'local' for username and password "
+        "accounts stored by this app (default), or 'authentik' for Authentik "
+        "single sign-on."
     )
-AUTH_DISABLED = AUTH_MODE == 'none'
-LOCAL_USERNAME = (os.environ.get('AUTH_LOCAL_USERNAME') or 'local').strip() or 'local'
+
+LOCAL_AUTH = AUTH_MODE == 'local'
+# Prefills the username field on the setup page. Only a default: whatever is
+# submitted there wins, so this is convenience, not configuration.
+LOCAL_USERNAME = (
+    os.environ.get('AUTH_LOCAL_USERNAME') or _DEFAULT_LOCAL_USERNAME
+).strip() or _DEFAULT_LOCAL_USERNAME
 
 # ===== Authentication via Authentik (OIDC) =====
 # Single sign-on through the self-hosted Authentik instance at auth.pickel.me.
@@ -213,12 +237,8 @@ AUTHENTIK_USER_GROUP = os.environ.get('AUTHENTIK_USER_GROUP', 'pick-a-recipe-use
 AUTHENTIK_ADMIN_GROUP = os.environ.get('AUTHENTIK_ADMIN_GROUP', 'admins')
 
 oauth = None
-if AUTH_DISABLED:
-    from database import ensure_local_user
-    ensure_local_user(LOCAL_USERNAME)
-    print(f"[Auth] WARNING: AUTH_MODE=none — authentication is DISABLED. Every "
-          f"request runs as local admin '{LOCAL_USERNAME}'. Only run this on a "
-          f"trusted network; do not expose it to the internet.")
+if LOCAL_AUTH:
+    print('[Auth] AUTH_MODE=local — sign in with an account stored by this app.')
 elif os.environ.get('AUTHENTIK_CLIENT_ID') and os.environ.get('AUTHENTIK_CLIENT_SECRET'):
     from authlib.integrations.flask_client import OAuth
     oauth = OAuth(app)
@@ -230,9 +250,9 @@ elif os.environ.get('AUTHENTIK_CLIENT_ID') and os.environ.get('AUTHENTIK_CLIENT_
         client_kwargs={'scope': 'openid email profile groups'},
     )
 else:
-    print('[Auth] WARNING: AUTHENTIK_CLIENT_ID / AUTHENTIK_CLIENT_SECRET are not set — '
-          'nobody can sign in. Configure Authentik OIDC, or set AUTH_MODE=none to '
-          'run without authentication.')
+    print('[Auth] WARNING: AUTH_MODE=authentik but AUTHENTIK_CLIENT_ID / '
+          'AUTHENTIK_CLIENT_SECRET are not set — nobody can sign in. Configure '
+          'Authentik OIDC, or drop AUTH_MODE to use local accounts instead.')
 
 
 def _bearer_identity() -> dict | None:
@@ -259,16 +279,12 @@ def _bearer_identity() -> dict | None:
 
 
 def _is_logged_in() -> bool:
-    if AUTH_DISABLED:
-        return True
     if 'user' in session:
         return True
     return _bearer_identity_safe() is not None
 
 
 def _current_user_is_admin() -> bool:
-    if AUTH_DISABLED:
-        return True
     bearer = _bearer_identity_safe()
     if bearer is not None:
         return bearer['is_admin']
@@ -283,27 +299,22 @@ def _bearer_identity_safe() -> dict | None:
 
 
 def _current_username() -> str | None:
-    """Effective owner for the request, independent of the session cookie.
-
-    WebSocket handlers can run before any HTTP request has seeded the session,
-    so AUTH_MODE=none needs a fallback that does not depend on the cookie.
-    """
-    if AUTH_DISABLED:
-        return session.get('user') or LOCAL_USERNAME
+    """Effective owner for the request: the session user, or a Bearer identity."""
     bearer = _bearer_identity_safe()
     if bearer is not None:
         return bearer['username']
     return session.get('user')
 
 
-@app.before_request
-def _seed_local_identity():
-    """AUTH_MODE=none has no login flow, so stamp the local identity onto the
-    session that the rest of the app reads for ownership scoping."""
-    if AUTH_DISABLED and session.get('user') != LOCAL_USERNAME:
-        session['user'] = LOCAL_USERNAME
-        session['is_admin'] = True
-        session.permanent = True
+def _setup_required() -> bool:
+    """True while local mode has no account anyone can sign in to.
+
+    Only ever True before the first password is set. Authentik mode never needs
+    setup: accounts arrive from the identity provider.
+    """
+    if not LOCAL_AUTH:
+        return False
+    return not local_account_exists()
 
 
 def _scope() -> tuple[str | None, bool]:
@@ -484,15 +495,193 @@ def share():
     return redirect(url_for('index'))
 
 
+# One message for every credential failure. Saying "no such user" or "wrong
+# password" would let anyone enumerate which accounts exist.
+_INVALID_CREDENTIALS = 'Invalid username or password.'
+
+
+def _client_ip() -> str:
+    """Best available client address, for throttling.
+
+    ProxyFix (applied above when TRUST_PROXY is on) has already resolved
+    X-Forwarded-For, so remote_addr is the caller rather than the proxy.
+    """
+    return request.remote_addr or 'unknown'
+
+
+def _wants_json() -> bool:
+    """True when the caller is the SPA rather than a plain form submission."""
+    if request.is_json:
+        return True
+    accept = request.accept_mimetypes
+    return accept['application/json'] > accept['text/html']
+
+
+def _establish_session(username: str, *, is_admin: bool) -> None:
+    """Start an authenticated session, discarding whatever preceded it.
+
+    The session is cleared before it is repopulated so that a fixated or stale
+    cookie cannot carry state across the privilege change. Anything the
+    anonymous /share flow parked is deliberately carried over: it is the whole
+    reason a user was sent to sign in.
+    """
+    pending_shared_url = session.get('shared_url')
+    pending_auto_start = session.get('auto_start_extraction')
+
+    session.clear()
+    session['user'] = username
+    session['is_admin'] = is_admin
+    session.permanent = True
+
+    if pending_shared_url:
+        session['shared_url'] = pending_shared_url
+    if pending_auto_start:
+        session['auto_start_extraction'] = True
+
+
+def _login_failed(message: str, status: int, *, retry_after: int | None = None):
+    """Report a failed sign-in, as JSON or a redirect depending on the caller."""
+    if _wants_json():
+        response = jsonify({'error': message})
+        response.status_code = status
+        if retry_after is not None:
+            response.headers['Retry-After'] = str(retry_after)
+        return response
+    flash(message, 'error')
+    response = redirect(url_for('login'))
+    if retry_after is not None:
+        response.headers['Retry-After'] = str(retry_after)
+    return response
+
+
 @app.route('/login')
 def login():
-    """Login page — single sign-on via Authentik."""
+    """Login page: a password form in local mode, an SSO button in Authentik mode."""
     if _is_logged_in():
         return redirect(url_for('index'))
+    if _setup_required():
+        return redirect(url_for('setup'))
     spa_login = os.path.join(FRONTEND_DIST, 'index.html')
     if os.path.exists(spa_login):
         return send_from_directory(FRONTEND_DIST, 'index.html')
-    return render_template('login.html', sso_enabled=oauth is not None)
+    return render_template(
+        'login.html',
+        sso_enabled=oauth is not None,
+        local_auth=LOCAL_AUTH,
+    )
+
+
+@app.route('/setup', methods=['GET', 'POST'])
+def setup():
+    """Create the first account, while the instance has none.
+
+    Served from a template rather than the SPA on purpose: this has to work
+    before the frontend bundle is necessarily built, and it is the only way
+    into a fresh instance.
+    """
+    if not _setup_required():
+        # Closed for good once an account exists, so this cannot be used to
+        # add a second admin or overwrite the first one's password.
+        return redirect(url_for('login'))
+
+    # An instance upgrading from AUTH_MODE=none already owns jobs and uploads
+    # under the name that mode seeded, and ownership is recorded as the username
+    # rather than the row id. Offering that name means the obvious path through
+    # this form keeps the history; typing a different one starts fresh.
+    adoptable = sole_passwordless_username()
+    suggested = adoptable or LOCAL_USERNAME
+
+    if request.method == 'GET':
+        return render_template(
+            'setup.html', suggested_username=suggested, adopting=adoptable
+        )
+
+    username = (request.form.get('username') or '').strip()
+    password = request.form.get('password') or ''
+    confirm = request.form.get('confirm_password') or ''
+
+    error = None
+    if not username:
+        error = 'Choose a username.'
+    elif len(username) > 64:
+        error = 'Username must be at most 64 characters.'
+    elif password != confirm:
+        error = 'The two passwords do not match.'
+    else:
+        try:
+            passwords.validate(password)
+        except passwords.WeakPassword as exc:
+            error = str(exc)
+
+    if error:
+        return render_template(
+            'setup.html',
+            suggested_username=username or suggested,
+            adopting=adoptable,
+            error=error,
+        ), 400
+
+    user = claim_first_local_admin(username, passwords.hash_password(password))
+    if user is None:
+        # Another request completed setup between the guard and the write.
+        return redirect(url_for('login'))
+
+    print(f"[Auth] first account created: {user['username']}")
+    _establish_session(user['username'], is_admin=True)
+    return redirect(url_for('index'))
+
+
+@app.route('/auth/local/login', methods=['POST'])
+def auth_local_login():
+    """Sign in with a username and password held by this app."""
+    if not LOCAL_AUTH:
+        return _login_failed('Password sign-in is disabled on this instance.', 400)
+    if _setup_required():
+        return redirect(url_for('setup'))
+
+    payload = request.get_json(silent=True) if request.is_json else None
+    source = payload if isinstance(payload, dict) else request.form
+    username = str(source.get('username') or '').strip()
+    password = str(source.get('password') or '')
+
+    # Keyed on both, so guessing many passwords for one account and one password
+    # across many accounts are both slowed. The client cannot influence the key
+    # beyond the username it is already trying.
+    throttle_key = f'{_client_ip()}|{username.lower()}'
+    wait = login_throttle.retry_after(throttle_key)
+    if wait > 0:
+        return _login_failed(
+            f'Too many attempts. Try again in {int(wait) + 1} seconds.',
+            429,
+            retry_after=int(wait) + 1,
+        )
+
+    user = get_user(username) if username else None
+    if user is None:
+        # Spend comparable time to a real check: otherwise a fast rejection
+        # reveals that the username does not exist.
+        passwords.dummy_verify()
+        login_throttle.record_failure(throttle_key)
+        return _login_failed(_INVALID_CREDENTIALS, 401)
+
+    if not passwords.verify(user.get('password_hash'), password):
+        login_throttle.record_failure(throttle_key)
+        return _login_failed(_INVALID_CREDENTIALS, 401)
+
+    login_throttle.reset(throttle_key)
+
+    # Cost parameters may have risen since this hash was stored; the password is
+    # in hand exactly once, so this is the only chance to upgrade it.
+    if passwords.needs_rehash(user['password_hash']):
+        set_user_password(user['username'], passwords.hash_password(password))
+
+    _establish_session(user['username'], is_admin=bool(user['is_admin']))
+    if _wants_json():
+        return jsonify({
+            'user': user['username'],
+            'is_admin': bool(user['is_admin']),
+        })
+    return redirect(url_for('index'))
 
 
 def _authentik_redirect_uri() -> str:
@@ -509,12 +698,13 @@ def _authentik_redirect_uri() -> str:
 @app.route('/auth/login')
 def auth_login():
     """Redirect the user to Authentik for authentication."""
-    if AUTH_DISABLED:
-        return redirect(url_for('index'))
     if oauth is None:
+        if LOCAL_AUTH:
+            # Nothing to redirect to; the password form is on the login page.
+            return redirect(url_for('login'))
         flash('Single sign-on is not configured. Set AUTHENTIK_CLIENT_ID and '
-              'AUTHENTIK_CLIENT_SECRET, or set AUTH_MODE=none to run without '
-              'authentication.', 'error')
+              'AUTHENTIK_CLIENT_SECRET, or drop AUTH_MODE to use local '
+              'accounts instead.', 'error')
         return redirect(url_for('login'))
     return oauth.authentik.authorize_redirect(_authentik_redirect_uri())
 
@@ -704,9 +894,6 @@ def auth_callback():
               'administrator to add you to the appropriate group in Authentik.', 'error')
         return redirect(url_for('login'))
 
-    pending_shared_url = session.get('shared_url')
-    pending_auto_start = session.get('auto_start_extraction')
-
     user = upsert_oidc_user(
         sub=sub,
         username=username,
@@ -716,15 +903,7 @@ def auth_callback():
         is_admin=is_admin,
     )
 
-    session.clear()
-    session['user'] = user['username']
-    session['is_admin'] = is_admin
-    session.permanent = True
-
-    if pending_shared_url:
-        session['shared_url'] = pending_shared_url
-    if pending_auto_start:
-        session['auto_start_extraction'] = True
+    _establish_session(user['username'], is_admin=is_admin)
 
     flash(f"Welcome, {user.get('name') or user['username']}!", 'success')
     return redirect(url_for('index'))
@@ -733,13 +912,9 @@ def auth_callback():
 @app.route('/logout')
 def logout():
     """Log out: clear the local session and end the Authentik session."""
-    if AUTH_DISABLED:
-        # Nothing to sign out of; _seed_local_identity would re-create the
-        # session on the next request anyway.
-        return redirect(url_for('index'))
-
-    session.pop('user', None)
-    session.pop('is_admin', None)
+    # Everything, not just the identity keys: a stale share or auto-start left
+    # behind would be picked up by whoever signs in next on this browser.
+    session.clear()
 
     end_session_url = None
     if oauth is not None:
@@ -1239,7 +1414,10 @@ def api_me():
     return jsonify({
         'user': session['user'],
         'is_admin': bool(session.get('is_admin', False)),
-        'auth_disabled': AUTH_DISABLED,
+        'auth_mode': AUTH_MODE,
+        # Retained so an older cached frontend bundle keeps working; there is no
+        # longer a mode in which authentication is off.
+        'auth_disabled': False,
         'shared_url': session.pop('shared_url', None),
         'auto_start': bool(session.pop('auto_start_extraction', False)),
     })
@@ -1248,9 +1426,14 @@ def api_me():
 @app.route('/api/auth/status', methods=['GET'])
 def api_auth_status():
     return jsonify({
+        'auth_mode': AUTH_MODE,
+        'local_auth_enabled': LOCAL_AUTH,
         'sso_enabled': oauth is not None,
-        'auth_disabled': AUTH_DISABLED,
+        # True only before the first account exists, so a client can send the
+        # user to setup instead of a sign-in form nobody can satisfy yet.
+        'setup_required': _setup_required(),
         'mobile_auth_enabled': mobile_auth.mobile_auth_enabled(),
+        'auth_disabled': False,
     })
 
 
@@ -1313,9 +1496,6 @@ def api_mobile_refresh():
 @app.route('/api/mobile/me', methods=['GET'])
 def api_mobile_me():
     """Identity behind the presented Bearer token."""
-    if AUTH_DISABLED:
-        return jsonify({'username': LOCAL_USERNAME, 'is_admin': True})
-
     identity = _bearer_identity_safe()
     if identity is None:
         return jsonify({'error': 'Authentication required'}), 401

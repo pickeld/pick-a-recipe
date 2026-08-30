@@ -21,6 +21,10 @@ sys.path.insert(0, os.path.join(ROOT, 'ui'))
 
 _test_dir = tempfile.mkdtemp()
 os.environ['DATA_DIR'] = _test_dir
+# Explicit: app-based sign-in goes through the identity provider, which is only
+# registered in authentik mode. Relying on the default would tie these tests to
+# whatever that default happens to be.
+os.environ['AUTH_MODE'] = 'authentik'
 os.environ.setdefault('JWT_SECRET_KEY', 'unit-test-secret-key')
 os.environ.setdefault('AUTHENTIK_CLIENT_ID', 'test-client-id')
 os.environ.setdefault('AUTHENTIK_CLIENT_SECRET', 'test-client-secret')

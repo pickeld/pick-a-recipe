@@ -4,7 +4,7 @@ A modern web interface for the Pick-a-Recipe video recipe extractor.
 
 ## Features
 
-- 🔐 **Authentik SSO (OIDC)** — no local passwords, or `AUTH_MODE=none` to run without sign-in
+- 🔐 **Local accounts or Authentik SSO (OIDC)** — chosen with `AUTH_MODE`
 - 📹 **URL Input** - Paste video URLs from TikTok, YouTube, Instagram, etc.
 - 📊 **Real-time Progress** - Watch the extraction process with live updates
 - ⚙️ **Configuration Management** - Save all settings through the web interface
@@ -64,13 +64,17 @@ docker run -d -p 5006:5006 -v pick-a-recipe-data:/app/data pickeld/pick-a-recipe
 
 ## Authentication
 
-Set by `AUTH_MODE`:
+Sign-in is always required. `AUTH_MODE` picks where accounts come from:
 
-- `authentik` (default) — sign-in required via Authentik single sign-on (OIDC).
-  Needs `AUTHENTIK_CLIENT_ID` and `AUTHENTIK_CLIENT_SECRET`.
-- `none` — no sign-in; every request runs as one local admin (`local`, or
-  `AUTH_LOCAL_USERNAME`). Convenient for local development, but there is no
-  access control whatsoever, so keep it off any untrusted network.
+- `local` (default) — username and password accounts stored by this app, hashed
+  with Argon2id. No identity provider needed: with no account yet, every page
+  redirects to `/setup`, which closes for good once one exists. Only an admin
+  can add further accounts; there is no self-registration.
+- `authentik` — Authentik single sign-on (OIDC). Needs `AUTHENTIK_CLIENT_ID` and
+  `AUTHENTIK_CLIENT_SECRET`. Password sign-in is refused in this mode.
+
+`AUTH_MODE=none` is gone. Instances still setting it boot with a warning as
+`local`, and setup adopts the old passwordless account so its data survives.
 
 The Android app in `../mobile/` uses JWT bearer tokens instead of cookies,
 enabled by setting `JWT_SECRET_KEY`. Bearer and cookie auth run side by side on
@@ -123,7 +127,8 @@ ui/
 The UI uses SQLite for data storage. A single database file is created in the project root:
 
 - `data/pick-a-recipe.db` - SQLite database containing:
-  - `users` table - User credentials (hashed passwords)
+  - `users` table - accounts; `password_hash` for local accounts, `oidc_sub` for
+    Authentik ones
   - `config` table - Configuration key-value pairs
 
 ## WebSocket Progress Events
@@ -141,8 +146,13 @@ The UI uses Socket.IO for real-time progress updates. The stages are:
 
 ## Security Notes
 
-- Authentication is delegated to Authentik single sign-on (OIDC) — no local passwords
-- Access requires membership in the configured Authentik user group; admin features require the admin group
-- `AUTH_MODE=none` disables authentication entirely and must only be used on a trusted network
+- Authentication cannot be switched off; Settings holds third-party API keys
+- Local passwords are Argon2id hashes with a per-account salt, rehashed on login
+  when cost parameters change; failed sign-ins are progressively delayed per
+  (IP, username) rather than locking the account
+- Wrong password and unknown username give the same response, so the login form
+  does not reveal which accounts exist
+- With Authentik, access requires membership in the configured user group; admin
+  features require the admin group
 - Session management uses Flask's secure sessions
 - API keys are stored in the local configuration file

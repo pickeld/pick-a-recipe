@@ -292,7 +292,8 @@ export interface SettingsExport {
 export interface SessionUser {
   user: string
   is_admin: boolean
-  /** True when the server runs with AUTH_MODE=none, where logout is a no-op */
+  auth_mode?: 'local' | 'authentik'
+  /** Always false now; kept so an older cached bundle still parses a response. */
   auth_disabled?: boolean
   /** Popped server-side from the /share flow; consumed once by Home */
   shared_url?: string | null
