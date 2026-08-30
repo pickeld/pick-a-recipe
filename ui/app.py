@@ -24,11 +24,13 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 import mobile_auth
 import passwords
 import login_throttle
+from helpers import setup_logger
 from database import (
     init_db, load_config, save_config,
     get_user, upsert_oidc_user,
     local_account_exists, claim_first_local_admin, set_user_password,
     sole_passwordless_username,
+    list_users, count_admins, create_local_user, set_user_admin, delete_user,
     get_history, get_history_entry, get_history_count, delete_history_entry,
     delete_history_entries_bulk, delete_job_entry, delete_jobs_bulk,
     get_combined_history_and_jobs, get_combined_history_and_jobs_count,
@@ -200,6 +202,11 @@ job_manager = init_job_manager(socketio)
 _DEFAULT_LOCAL_USERNAME = 'admin'
 AUTH_MODE = (os.environ.get('AUTH_MODE') or 'local').strip().lower()
 
+# Account lifecycle goes through a logger rather than print(): these are the
+# records you go looking for after something unexpected, and stdout buffering
+# means a print can still be sitting unflushed when the process is killed.
+auth_log = setup_logger('auth')
+
 if AUTH_MODE == 'none':
     # Accepted rather than rejected so existing deployments still boot. They
     # land on first-run setup, which adopts the passwordless account that this
@@ -278,17 +285,69 @@ def _bearer_identity() -> dict | None:
     return identity
 
 
+def _session_account() -> dict | None:
+    """The account the session cookie names, re-read from the database.
+
+    Cached per request. Local mode has to consult the database rather than
+    trusting the cookie: an admin who deletes or demotes someone expects that
+    to take effect now, and a signed cookie would otherwise keep working until
+    it expired. Returns None once the account is gone or has lost its password.
+
+    Authentik mode keeps trusting the cookie. Admin there comes from group
+    membership resolved at sign-in, and the local row is a cache of the last
+    login rather than the authority, so re-reading it would decide access from
+    stale data.
+    """
+    if not LOCAL_AUTH:
+        return None
+    if hasattr(g, '_session_account'):
+        return g._session_account
+
+    username = session.get('user')
+    account = get_user(username) if username else None
+    if account is not None and not account.get('password_hash'):
+        # Left without a password, so nothing can authenticate as it any more.
+        account = None
+    g._session_account = account
+    return account
+
+
+def _session_identity() -> dict | None:
+    """{'username', 'is_admin'} for a cookie session, or None if it is not valid."""
+    if 'user' not in session:
+        return None
+    if not LOCAL_AUTH:
+        return {
+            'username': session['user'],
+            'is_admin': bool(session.get('is_admin')),
+        }
+    account = _session_account()
+    if account is None:
+        return None
+    return {
+        'username': account['username'],
+        'is_admin': bool(account['is_admin']),
+    }
+
+
+def _current_identity() -> dict | None:
+    """Who is making this request: the cookie session, else a Bearer token."""
+    try:
+        identity = _session_identity()
+    except RuntimeError:  # outside a request context
+        identity = None
+    if identity is not None:
+        return identity
+    return _bearer_identity_safe()
+
+
 def _is_logged_in() -> bool:
-    if 'user' in session:
-        return True
-    return _bearer_identity_safe() is not None
+    return _current_identity() is not None
 
 
 def _current_user_is_admin() -> bool:
-    bearer = _bearer_identity_safe()
-    if bearer is not None:
-        return bearer['is_admin']
-    return bool(session.get('is_admin'))
+    identity = _current_identity()
+    return bool(identity and identity['is_admin'])
 
 
 def _bearer_identity_safe() -> dict | None:
@@ -300,10 +359,8 @@ def _bearer_identity_safe() -> dict | None:
 
 def _current_username() -> str | None:
     """Effective owner for the request: the session user, or a Bearer identity."""
-    bearer = _bearer_identity_safe()
-    if bearer is not None:
-        return bearer['username']
-    return session.get('user')
+    identity = _current_identity()
+    return identity['username'] if identity else None
 
 
 def _setup_required() -> bool:
@@ -338,6 +395,23 @@ def api_login_required(f):
     def decorated_function(*args, **kwargs):
         if not _is_logged_in():
             return jsonify({'error': 'Authentication required'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def api_admin_required(f):
+    """Require an admin for API routes.
+
+    401 when nobody is signed in and 403 when someone is but lacks the rights,
+    so a client can tell "log in again" from "you cannot do this".
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        identity = _current_identity()
+        if identity is None:
+            return jsonify({'error': 'Authentication required'}), 401
+        if not identity['is_admin']:
+            return jsonify({'error': 'Admin access required'}), 403
         return f(*args, **kwargs)
     return decorated_function
 
@@ -582,12 +656,27 @@ def _adoptable_username() -> str | None:
     return sole_passwordless_username()
 
 
-def _validate_new_account(username: str, password: str, confirm: str) -> str | None:
-    """Reason the proposed first account is unacceptable, or None if it is fine."""
+def _validate_username(username: str) -> str | None:
+    """Reason the username is unacceptable, or None if it is fine.
+
+    Control characters are rejected rather than stripped: a name containing a
+    newline could forge entries in the account audit log, and one containing
+    other invisibles would be impossible to type at the sign-in form.
+    """
     if not username:
         return 'Choose a username.'
     if len(username) > 64:
         return 'Username must be at most 64 characters.'
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in username):
+        return 'Username cannot contain spaces or control characters.'
+    return None
+
+
+def _validate_new_account(username: str, password: str, confirm: str) -> str | None:
+    """Reason the proposed first account is unacceptable, or None if it is fine."""
+    problem = _validate_username(username)
+    if problem:
+        return problem
     if password != confirm:
         return 'The two passwords do not match.'
     try:
@@ -639,7 +728,7 @@ def setup():
         # Another request completed setup between the guard and the write.
         return redirect(url_for('login'))
 
-    print(f"[Auth] first account created: {user['username']}")
+    auth_log.info('first account created: %s', user['username'])
     _establish_session(user['username'], is_admin=True)
     return redirect(url_for('index'))
 
@@ -677,7 +766,7 @@ def api_setup():
     if user is None:
         return jsonify({'error': 'Setup has already been completed.'}), 409
 
-    print(f"[Auth] first account created: {user['username']}")
+    auth_log.info('first account created: %s', user['username'])
     _establish_session(user['username'], is_admin=True)
     return jsonify({'user': user['username'], 'is_admin': True})
 
@@ -701,25 +790,36 @@ def auth_local_login():
     throttle_key = f'{_client_ip()}|{username.lower()}'
     wait = login_throttle.retry_after(throttle_key)
     if wait > 0:
+        auth_log.warning('sign-in throttled for %r from %s',
+                         username, _client_ip())
         return _login_failed(
             f'Too many attempts. Try again in {int(wait) + 1} seconds.',
             429,
             retry_after=int(wait) + 1,
         )
 
+    # Logged as separate reasons on purpose. The response cannot distinguish
+    # them without telling an attacker which usernames exist, but the operator
+    # reading the log needs to: many misses across distinct names is credential
+    # stuffing, while repeated misses on one real name is a targeted guess.
     user = get_user(username) if username else None
     if user is None:
         # Spend comparable time to a real check: otherwise a fast rejection
         # reveals that the username does not exist.
         passwords.dummy_verify()
         login_throttle.record_failure(throttle_key)
+        auth_log.warning('sign-in failed: no such account %r from %s',
+                         username, _client_ip())
         return _login_failed(_INVALID_CREDENTIALS, 401)
 
     if not passwords.verify(user.get('password_hash'), password):
         login_throttle.record_failure(throttle_key)
+        auth_log.warning('sign-in failed: wrong password for %s from %s',
+                         user['username'], _client_ip())
         return _login_failed(_INVALID_CREDENTIALS, 401)
 
     login_throttle.reset(throttle_key)
+    auth_log.info('signed in: %s from %s', user['username'], _client_ip())
 
     # Cost parameters may have risen since this hash was stored; the password is
     # in hand exactly once, so this is the only chance to upgrade it.
@@ -774,7 +874,7 @@ def _resolve_oidc_identity(userinfo: dict) -> tuple[str | None, str | None, bool
     groups = set(userinfo.get('groups') or [])
     is_admin = AUTHENTIK_ADMIN_GROUP in groups
     if not is_admin and AUTHENTIK_USER_GROUP not in groups:
-        print(f"[Auth] denied login for sub={sub}: groups={sorted(groups)}")
+        auth_log.warning('denied login for sub=%s: groups=%s', sub, sorted(groups))
         return sub, None, False
 
     username = (
@@ -1462,10 +1562,15 @@ def reupload_recipe(history_id):
 @app.route('/api/me', methods=['GET'])
 @api_login_required
 def api_me():
+    # From the resolved identity rather than straight out of the cookie, so a
+    # demotion applied while the user was signed in is reflected here — this is
+    # what the UI keys admin-only sections off.
+    identity = _current_identity()
     return jsonify({
-        'user': session['user'],
-        'is_admin': bool(session.get('is_admin', False)),
+        'user': identity['username'],
+        'is_admin': identity['is_admin'],
         'auth_mode': AUTH_MODE,
+        'local_auth_enabled': LOCAL_AUTH,
         # Retained so an older cached frontend bundle keeps working; there is no
         # longer a mode in which authentication is off.
         'auth_disabled': False,
@@ -1553,14 +1658,197 @@ def api_mobile_me():
     return jsonify({'username': identity['username'], 'is_admin': identity['is_admin']})
 
 
-@app.route('/api/config', methods=['GET'])
+# ===== User administration =====
+#
+# Local mode only. Under Authentik the identity provider owns accounts: it
+# decides who exists, group membership decides who administers, and both are
+# reapplied at every sign-in — so creating an account here would be unusable
+# (password sign-in is refused), and deleting one would not keep anyone out.
+
+_LOCAL_ONLY = ('User administration is managed by your identity provider in '
+               'this mode.')
+
+
+def _public_user(user: dict | None) -> dict | None:
+    """An account as the API exposes it: never the password hash."""
+    if user is None:
+        return None
+    return {
+        'username': user['username'],
+        'email': user.get('email'),
+        'name': user.get('name'),
+        'is_admin': bool(user['is_admin']),
+        'is_oidc': user.get('oidc_sub') is not None,
+        'has_password': bool(user.get('password_hash')),
+        'created_at': user.get('created_at'),
+    }
+
+
+def _users_payload():
+    # SQLite hands back 0/1 for the boolean expressions in the query; coerce so
+    # clients get real booleans rather than numbers that are truthy either way.
+    users = [
+        {**row,
+         'is_admin': bool(row['is_admin']),
+         'is_oidc': bool(row['is_oidc']),
+         'has_password': bool(row['has_password'])}
+        for row in list_users()
+    ]
+    return jsonify({'users': users, 'admin_count': count_admins()})
+
+
+@app.route('/api/users', methods=['GET'])
+@api_admin_required
+def api_list_users():
+    return _users_payload()
+
+
+@app.route('/api/users', methods=['POST'])
+@api_admin_required
+def api_create_user():
+    """Add an account. Only an admin can; there is no self-registration."""
+    if not LOCAL_AUTH:
+        return jsonify({'error': _LOCAL_ONLY}), 400
+
+    body = request.get_json(silent=True) or {}
+    username = str(body.get('username') or '').strip()
+    password = str(body.get('password') or '')
+    is_admin = bool(body.get('is_admin'))
+
+    problem = _validate_username(username)
+    if problem:
+        return jsonify({'error': problem}), 400
+    try:
+        passwords.validate(password)
+    except passwords.WeakPassword as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    user = create_local_user(
+        username, passwords.hash_password(password), is_admin=is_admin
+    )
+    if user is None:
+        return jsonify({'error': f'An account named {username} already exists.'}), 409
+
+    auth_log.info('account created: %s (admin=%s) by %s',
+                  username, is_admin, _current_username())
+    return jsonify({'user': _public_user(user)}), 201
+
+
+@app.route('/api/users/<username>', methods=['PATCH'])
+@api_admin_required
+def api_update_user(username: str):
+    """Change another account's admin rights or password."""
+    if not LOCAL_AUTH:
+        return jsonify({'error': _LOCAL_ONLY}), 400
+
+    user = get_user(username)
+    if user is None:
+        return jsonify({'error': 'No such account.'}), 404
+
+    body = request.get_json(silent=True) or {}
+    actor = _current_username()
+
+    if 'is_admin' in body:
+        is_admin = bool(body['is_admin'])
+        # Demoting yourself is how an instance ends up with no admin at all,
+        # and you would lose the rights needed to undo it.
+        if username == actor and not is_admin:
+            return jsonify({'error': 'You cannot remove your own admin rights.'}), 400
+        if not is_admin and bool(user['is_admin']) and count_admins() <= 1:
+            return jsonify({'error': 'The last admin cannot be demoted.'}), 400
+        set_user_admin(username, is_admin)
+
+    if 'password' in body:
+        password = str(body.get('password') or '')
+        try:
+            passwords.validate(password)
+        except passwords.WeakPassword as exc:
+            return jsonify({'error': str(exc)}), 400
+        set_user_password(username, passwords.hash_password(password))
+        # Their sessions keep working: the cookie is checked against the account
+        # existing, not against the password. Signing them out here would be
+        # security theatre if they are the ones who asked for the reset, and a
+        # nuisance if they are not.
+        auth_log.info('password reset for %s by %s', username, actor)
+
+    return jsonify({'user': _public_user(get_user(username))})
+
+
+@app.route('/api/users/<username>', methods=['DELETE'])
+@api_admin_required
+def api_delete_user(username: str):
+    """Remove an account, along with the jobs and uploads it owns."""
+    if not LOCAL_AUTH:
+        return jsonify({'error': _LOCAL_ONLY}), 400
+
+    actor = _current_username()
+    user = get_user(username)
+    if user is None:
+        return jsonify({'error': 'No such account.'}), 404
+    if username == actor:
+        return jsonify({'error': 'You cannot delete your own account.'}), 400
+    if bool(user['is_admin']) and count_admins() <= 1:
+        return jsonify({'error': 'The last admin cannot be deleted.'}), 400
+
+    delete_user(username)
+    auth_log.info('account deleted: %s by %s', username, actor)
+    return jsonify({'status': 'deleted', 'username': username})
+
+
+@app.route('/api/me/password', methods=['POST'])
 @api_login_required
+def api_change_own_password():
+    """Change your own password, proving you know the current one.
+
+    Requiring the current password means a borrowed session or a stolen cookie
+    cannot be used to lock the real owner out of their account.
+    """
+    if not LOCAL_AUTH:
+        return jsonify({'error': 'Passwords are managed by your identity '
+                                 'provider in this mode.'}), 400
+
+    username = _current_username()
+    user = get_user(username) if username else None
+    if user is None:
+        return jsonify({'error': 'Authentication required'}), 401
+
+    body = request.get_json(silent=True) or {}
+    current = str(body.get('current_password') or '')
+    new_password = str(body.get('new_password') or '')
+
+    throttle_key = f'{_client_ip()}|{(username or "").lower()}|change'
+    wait = login_throttle.retry_after(throttle_key)
+    if wait > 0:
+        return jsonify({
+            'error': f'Too many attempts. Try again in {int(wait) + 1} seconds.'
+        }), 429
+
+    if not passwords.verify(user.get('password_hash'), current):
+        login_throttle.record_failure(throttle_key)
+        return jsonify({'error': 'Current password is incorrect.'}), 403
+    login_throttle.reset(throttle_key)
+
+    try:
+        passwords.validate(new_password)
+    except passwords.WeakPassword as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    set_user_password(user['username'], passwords.hash_password(new_password))
+    auth_log.info('password changed by %s', user['username'])
+    return jsonify({'status': 'changed'})
+
+
+# Configuration is instance-wide and holds the LLM, Mealie and Tandoor API keys,
+# so reading it is as sensitive as writing it: a non-admin who could GET this
+# would walk away with the keys. Admin-only in both directions.
+@app.route('/api/config', methods=['GET'])
+@api_admin_required
 def api_get_config():
     return jsonify(load_config())
 
 
 @app.route('/api/config', methods=['POST'])
-@api_login_required
+@api_admin_required
 def api_post_config():
     from config import DEFAULT_CONFIG
     data = request.get_json()
@@ -1579,7 +1867,7 @@ def api_post_config():
 # ===== Settings Export/Import API Endpoints =====
 
 @app.route('/api/settings/export', methods=['GET'])
-@api_login_required
+@api_admin_required
 def export_settings():
     """Export all settings as JSON for backup/transfer."""
     config = load_config()
@@ -1595,7 +1883,7 @@ def export_settings():
 
 
 @app.route('/api/settings/import', methods=['POST'])
-@api_login_required
+@api_admin_required
 def import_settings():
     """Import settings from a JSON backup file."""
     from config import DEFAULT_CONFIG
@@ -1633,8 +1921,10 @@ def import_settings():
     })
 
 
+# Cookies authenticate yt-dlp as whoever exported them, and the path is written
+# into instance-wide config, so this is an admin operation like the rest of it.
 @app.route('/api/cookies/upload', methods=['POST'])
-@api_login_required
+@api_admin_required
 def upload_cookies_file():
     """Upload a cookies.txt file for yt-dlp authentication.
     
@@ -1697,7 +1987,7 @@ def upload_cookies_file():
 
 
 @app.route('/api/cookies/delete', methods=['DELETE'])
-@api_login_required
+@api_admin_required
 def delete_cookies_file():
     """Delete the uploaded cookies file."""
     from config import DATA_DIR

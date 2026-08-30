@@ -275,6 +275,45 @@ export const api = {
       handle401: true,
     }),
 
+  // ===== User administration (admin only, local mode only) =====
+  listUsers: () =>
+    request<{ users: import('@/types').ManagedUser[]; admin_count: number }>(
+      '/api/users',
+    ),
+
+  createUser: (username: string, password: string, isAdmin: boolean) =>
+    request<{ user: import('@/types').ManagedUser }>('/api/users', {
+      method: 'POST',
+      json: { username, password, is_admin: isAdmin },
+    }),
+
+  setUserAdmin: (username: string, isAdmin: boolean) =>
+    request<{ user: import('@/types').ManagedUser }>(
+      `/api/users/${encodeURIComponent(username)}`,
+      { method: 'PATCH', json: { is_admin: isAdmin } },
+    ),
+
+  resetUserPassword: (username: string, password: string) =>
+    request<{ user: import('@/types').ManagedUser }>(
+      `/api/users/${encodeURIComponent(username)}`,
+      { method: 'PATCH', json: { password } },
+    ),
+
+  deleteUser: (username: string) =>
+    request<{ status: string; username: string }>(
+      `/api/users/${encodeURIComponent(username)}`,
+      { method: 'DELETE' },
+    ),
+
+  // ===== Own account =====
+  // handle401 is off: a 401 here means the session really is gone, and the
+  // redirect to /login is the right answer. A wrong current password is a 403.
+  changeOwnPassword: (currentPassword: string, newPassword: string) =>
+    request<{ status: string }>('/api/me/password', {
+      method: 'POST',
+      json: { current_password: currentPassword, new_password: newPassword },
+    }),
+
   // ===== First-run setup =====
   // Only answers while the instance has no account; 409 once one exists.
   setupInfo: () =>
