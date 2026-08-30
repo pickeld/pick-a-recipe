@@ -206,6 +206,21 @@ portainer_api() {
   curl "${curl_args[@]}"
 }
 
+require_json_array() {
+  # Portainer answers errors with an object like {"message":...,"details":...},
+  # which array filters then fail on with an unhelpful jq type error. Surface
+  # what the API actually said instead.
+  local response="$1" what="$2" detail
+  echo "${response}" | jq -e 'type == "array"' &>/dev/null && return 0
+  detail="$(echo "${response}" | jq -r '.message // .details // empty' 2>/dev/null)"
+  [[ -n "${detail}" ]] || detail="$(echo "${response}" | tr -d '\n' | head -c 200)"
+  error "Portainer rejected the ${what} request: ${detail:-<empty response>}"
+  if [[ "${detail}" =~ [Uu]nauthorized|[Ff]orbidden|[Ii]nvalid|[Cc]redential ]]; then
+    die "The API key is not being accepted. Reissue it in Portainer under My account > Access tokens, then update the PORTAINER_API_KEY secret."
+  fi
+  die "Expected a JSON array for the ${what}. Check that PORTAINER_URL points at the Portainer API and not a proxy error page."
+}
+
 info "Portainer URL : ${PORTAINER_URL}"
 info "Stack name    : ${STACK_NAME}"
 info "Compose file  : ${COMPOSE_FILE}"
@@ -220,10 +235,13 @@ if [[ "${STOP_EXTERNAL}" == "true" ]]; then
 fi
 
 if [[ "${PORTAINER_AUTH_MODE}" == "apikey" ]]; then
-  info "Authenticating with Portainer API key..."
+  # /status has a public access policy, so a 200 here says nothing about the
+  # API key — it only proves the URL and TLS path are good. Key validity is
+  # established by the first authenticated call, /endpoints below.
+  info "Checking the Portainer API is reachable..."
   status_response="$(portainer_api GET "/status")"
   echo "${status_response}" | jq -e '.Version' &>/dev/null \
-    || die "API key authentication failed. Check PORTAINER_URL and PORTAINER_API_KEY."
+    || die "Cannot reach the Portainer API. Check PORTAINER_URL${PORTAINER_TLS_HOST:+ and PORTAINER_TLS_HOST}."
 else
   info "Authenticating..."
   auth_response="$(curl -sk -X POST "${PORTAINER_URL}/api/auth" \
@@ -235,6 +253,7 @@ fi
 
 if [[ -z "${PORTAINER_ENDPOINT_ID}" ]]; then
   endpoints="$(portainer_api GET "/endpoints")"
+  require_json_array "${endpoints}" "environment list"
   PORTAINER_ENDPOINT_ID="$(echo "${endpoints}" | jq -r '.[] | select(.Name=="srv2" or .Name=="local") | .Id' | head -1)"
   if [[ -z "${PORTAINER_ENDPOINT_ID}" ]]; then
     PORTAINER_ENDPOINT_ID="$(echo "${endpoints}" | jq -r '.[0].Id // empty')"
@@ -245,6 +264,7 @@ if [[ -z "${PORTAINER_ENDPOINT_ID}" ]]; then
 fi
 
 stacks="$(portainer_api GET "/stacks")"
+require_json_array "${stacks}" "stack list"
 existing_id="$(echo "${stacks}" | jq -r --arg name "${STACK_NAME}" '.[] | select(.Name == $name) | .Id' | head -1)"
 existing_external="$(echo "${stacks}" | jq -r --arg name "${STACK_NAME}" '.[] | select(.Name == $name) | .Status' | head -1)"
 
