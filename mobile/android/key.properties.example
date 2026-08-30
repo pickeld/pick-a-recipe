@@ -1,0 +1,12 @@
+# Copy to android/key.properties (gitignored) to enable release signing.
+# Generate a keystore first (keep the .jks OUT of git):
+#
+#   keytool -genkey -v -keystore ~/pick-a-recipe-upload.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+#
+# Then fill in the values below. storeFile may be absolute or relative to
+# android/app/.
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=upload
+storeFile=/absolute/path/to/pick-a-recipe-upload.jks

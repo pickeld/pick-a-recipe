@@ -14,10 +14,14 @@ import json
 from datetime import datetime, timedelta
 from functools import wraps
 
+from urllib.parse import urlencode, urlsplit
+
+import requests
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, make_response, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, make_response, g, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
+import mobile_auth
 from database import (
     init_db, load_config, save_config,
     get_user, upsert_oidc_user,
@@ -29,6 +33,8 @@ from database import (
     get_pending_upload, get_pending_upload_by_job, get_pending_uploads,
     cleanup_expired_pending_uploads, cleanup_old_jobs,
     save_push_subscription, get_push_subscriptions, delete_push_subscription,
+    save_mobile_nonce, consume_mobile_nonce, delete_expired_mobile_nonces,
+    mobile_nonce_exists,
 )
 from job_manager import (
     init_job_manager, get_job_manager, resolve_max_concurrent,
@@ -229,14 +235,51 @@ else:
           'run without authentication.')
 
 
+def _bearer_identity() -> dict | None:
+    """Resolve Authorization: Bearer <jwt> to {'username', 'is_admin'}, cached per request.
+
+    Cookie sessions take precedence everywhere; Bearer is only consulted when
+    no session exists, so the web/PWA path behaves exactly as before.
+    """
+    if hasattr(g, '_mobile_identity'):
+        return g._mobile_identity
+    identity = None
+    try:
+        header = request.headers.get('Authorization', '')
+    except RuntimeError:
+        header = ''
+    if header.startswith('Bearer '):
+        payload = mobile_auth.decode_token(header[len('Bearer '):].strip(), expected_type='access')
+        if payload:
+            user = get_user(payload.get('sub') or '')
+            if user:
+                identity = {'username': user['username'], 'is_admin': bool(user['is_admin'])}
+    g._mobile_identity = identity
+    return identity
+
+
 def _is_logged_in() -> bool:
-    return AUTH_DISABLED or 'user' in session
+    if AUTH_DISABLED:
+        return True
+    if 'user' in session:
+        return True
+    return _bearer_identity_safe() is not None
 
 
 def _current_user_is_admin() -> bool:
     if AUTH_DISABLED:
         return True
+    bearer = _bearer_identity_safe()
+    if bearer is not None:
+        return bearer['is_admin']
     return bool(session.get('is_admin'))
+
+
+def _bearer_identity_safe() -> dict | None:
+    try:
+        return _bearer_identity()
+    except RuntimeError:
+        return None
 
 
 def _current_username() -> str | None:
@@ -247,6 +290,9 @@ def _current_username() -> str | None:
     """
     if AUTH_DISABLED:
         return session.get('user') or LOCAL_USERNAME
+    bearer = _bearer_identity_safe()
+    if bearer is not None:
+        return bearer['username']
     return session.get('user')
 
 
@@ -323,6 +369,7 @@ def _run_cleanup_scheduler() -> None:
             try:
                 cleanup_old_jobs(hours=72)
                 cleanup_expired_pending_uploads()
+                delete_expired_mobile_nonces()
                 prune_artifact_dirs()
             except Exception as exc:
                 print(f"[Cleanup] error: {exc}")
@@ -472,6 +519,126 @@ def auth_login():
     return oauth.authentik.authorize_redirect(_authentik_redirect_uri())
 
 
+def _resolve_oidc_identity(userinfo: dict) -> tuple[str | None, str | None, bool]:
+    """Map IdP claims to (sub, username, is_admin), shared by web and mobile.
+
+    Returns username None when group membership does not grant access. Both
+    sign-in paths go through here so the mobile flow can never become a way
+    around the group check.
+    """
+    sub = userinfo.get('sub')
+    if not sub:
+        return None, None, False
+
+    groups = set(userinfo.get('groups') or [])
+    is_admin = AUTHENTIK_ADMIN_GROUP in groups
+    if not is_admin and AUTHENTIK_USER_GROUP not in groups:
+        print(f"[Auth] denied login for sub={sub}: groups={sorted(groups)}")
+        return sub, None, False
+
+    username = (
+        userinfo.get('preferred_username')
+        or (userinfo.get('email') or '').split('@')[0]
+        or sub
+    )
+    return sub, username, is_admin
+
+
+def _mobile_deep_link_schemes() -> set[str]:
+    raw = os.environ.get('MOBILE_DEEP_LINK_SCHEMES', 'par')
+    return {s.strip().lower() for s in raw.split(',') if s.strip()}
+
+
+def _is_allowed_deep_link(uri: str) -> bool:
+    """Only allow the app's own custom scheme, so the callback cannot be
+    redirected to an attacker-controlled target carrying live tokens."""
+    if not uri:
+        return False
+    parts = urlsplit(uri)
+    return parts.scheme.lower() in _mobile_deep_link_schemes() and not parts.netloc.startswith('.')
+
+
+def _authentik_token_endpoints() -> tuple[str, str]:
+    """(token_endpoint, userinfo_endpoint), preferring OIDC discovery.
+
+    Falls back to Authentik's documented layout under the issuer so that app
+    sign-in does not hinge on a second outbound request succeeding mid-redirect.
+    """
+    try:
+        meta = oauth.authentik.load_server_metadata()
+        return meta['token_endpoint'], meta['userinfo_endpoint']
+    except Exception as exc:
+        print(f'[MobileAuth] OIDC discovery unavailable ({exc}); '
+              f'falling back to issuer-derived endpoints')
+        return f'{AUTHENTIK_ISSUER_URL}/token/', f'{AUTHENTIK_ISSUER_URL}/userinfo/'
+
+
+def _mobile_oidc_callback(code: str | None, nonce_row: dict):
+    """Finish sign-in for the Android app and hand tokens back via deep link.
+
+    Runs the authorization-code exchange server-side (the client secret must
+    not ship in the app), then redirects to the app's custom scheme with a
+    freshly minted JWT pair in the URL fragment. Fragments are not sent to
+    servers or logged in the Referer header, unlike query parameters.
+    """
+    redirect_uri = nonce_row['redirect_uri']
+
+    def fail(reason: str, log: str):
+        print(f'[MobileAuth] {log}')
+        return redirect(f'{redirect_uri}#{urlencode({"error": reason})}')
+
+    if not code:
+        return fail('invalid_request', 'callback without an authorization code')
+    if not mobile_auth.mobile_auth_enabled():
+        return fail('server_misconfigured', 'JWT_SECRET_KEY is not set')
+
+    token_endpoint, userinfo_endpoint = _authentik_token_endpoints()
+    try:
+        token_resp = requests.post(
+            token_endpoint,
+            data={
+                'grant_type': 'authorization_code',
+                'code': code,
+                'redirect_uri': _authentik_redirect_uri(),
+                'client_id': os.environ['AUTHENTIK_CLIENT_ID'],
+                'client_secret': os.environ['AUTHENTIK_CLIENT_SECRET'],
+            },
+            timeout=15,
+        )
+        token_resp.raise_for_status()
+        idp_access_token = (token_resp.json() or {}).get('access_token')
+        if not idp_access_token:
+            return fail('invalid_grant', 'token endpoint returned no access_token')
+
+        userinfo_resp = requests.get(
+            userinfo_endpoint,
+            headers={'Authorization': f'Bearer {idp_access_token}'},
+            timeout=15,
+        )
+        userinfo_resp.raise_for_status()
+        userinfo = userinfo_resp.json() or {}
+    except Exception as exc:
+        return fail('token_exchange_failed', f'token exchange failed: {exc}')
+
+    sub, username, is_admin = _resolve_oidc_identity(userinfo)
+    if not sub:
+        return fail('invalid_identity', 'identity provider returned no subject claim')
+    if username is None:
+        return fail('not_authorized', f'sub={sub} is not in an authorized group')
+
+    user = upsert_oidc_user(
+        sub=sub,
+        username=username,
+        email=userinfo.get('email'),
+        name=userinfo.get('name'),
+        avatar_url=userinfo.get('picture'),
+        is_admin=is_admin,
+    )
+    pair = mobile_auth.issue_token_pair(user['username'], is_admin=is_admin)
+    print(f"[MobileAuth] issued token pair for {user['username']}")
+    return redirect(f'{redirect_uri}#{urlencode(pair)}')
+
+
 @app.route('/auth/callback')
 def auth_callback():
     """Handle the OIDC callback from Authentik."""
@@ -483,6 +650,19 @@ def auth_callback():
         flash(f'Sign-in failed: {reason}', 'error')
         return redirect(url_for('login'))
 
+    # A state we issued as a mobile nonce belongs to the app flow. Recognising a
+    # spent one lets us reject a replay outright instead of falling through to
+    # the browser flow, which would only fail with a confusing session error.
+    state = request.args.get('state') or ''
+    if state:
+        nonce_row = consume_mobile_nonce(state)
+        if nonce_row is not None:
+            return _mobile_oidc_callback(request.args.get('code'), nonce_row)
+        if mobile_nonce_exists(state):
+            print('[MobileAuth] rejected replayed or expired sign-in state')
+            return jsonify({'error': 'This sign-in link has already been used or '
+                                     'has expired. Please sign in again.'}), 400
+
     try:
         token = oauth.authentik.authorize_access_token()
     except Exception as exc:
@@ -491,24 +671,14 @@ def auth_callback():
         return redirect(url_for('login'))
 
     userinfo = token.get('userinfo') or oauth.authentik.parse_id_token(token)
-    sub = userinfo.get('sub')
+    sub, username, is_admin = _resolve_oidc_identity(userinfo)
     if not sub:
         flash('Sign-in failed: identity provider did not provide a subject claim.', 'error')
         return redirect(url_for('login'))
-
-    groups = set(userinfo.get('groups') or [])
-    is_admin = AUTHENTIK_ADMIN_GROUP in groups
-    if not is_admin and AUTHENTIK_USER_GROUP not in groups:
-        print(f"[Auth] denied login for sub={sub}: groups={sorted(groups)}")
+    if username is None:
         flash('Your account is not authorized to use Pick-a-Recipe. Ask an '
               'administrator to add you to the appropriate group in Authentik.', 'error')
         return redirect(url_for('login'))
-
-    username = (
-        userinfo.get('preferred_username')
-        or (userinfo.get('email') or '').split('@')[0]
-        or sub
-    )
 
     pending_shared_url = session.get('shared_url')
     pending_auto_start = session.get('auto_start_extraction')
@@ -1056,7 +1226,76 @@ def api_auth_status():
     return jsonify({
         'sso_enabled': oauth is not None,
         'auth_disabled': AUTH_DISABLED,
+        'mobile_auth_enabled': mobile_auth.mobile_auth_enabled(),
     })
+
+
+# ===== Mobile (Android app) auth =====
+# The app cannot hold the OIDC client secret, so it opens the system browser
+# against Authentik and the server completes the code exchange, handing back a
+# JWT pair over a custom-scheme deep link. Disabled unless JWT_SECRET_KEY is set.
+
+@app.route('/api/mobile/auth/login-url', methods=['GET'])
+def api_mobile_login_url():
+    """Start app sign-in: return the Authentik URL to open in the browser."""
+    if not mobile_auth.mobile_auth_enabled():
+        return jsonify({'error': 'Mobile auth is not configured. Set JWT_SECRET_KEY.'}), 503
+    if oauth is None:
+        return jsonify({'error': 'Single sign-on is not configured on this server.'}), 503
+
+    redirect_uri = (request.args.get('redirect') or '').strip()
+    if not _is_allowed_deep_link(redirect_uri):
+        return jsonify({'error': 'redirect must use an allowed app scheme'}), 400
+
+    nonce = secrets.token_urlsafe(32)
+    if not save_mobile_nonce(nonce, redirect_uri):
+        return jsonify({'error': 'Could not start sign-in. Please try again.'}), 500
+
+    meta = oauth.authentik.load_server_metadata()
+    params = {
+        'response_type': 'code',
+        'client_id': os.environ['AUTHENTIK_CLIENT_ID'],
+        'redirect_uri': _authentik_redirect_uri(),
+        'scope': 'openid email profile groups',
+        'state': nonce,
+    }
+    return jsonify({
+        'auth_url': f"{meta['authorization_endpoint']}?{urlencode(params)}",
+        'state': nonce,
+    })
+
+
+@app.route('/api/mobile/auth/refresh', methods=['POST'])
+def api_mobile_refresh():
+    """Exchange a valid refresh token for a fresh token pair."""
+    if not mobile_auth.mobile_auth_enabled():
+        return jsonify({'error': 'Mobile auth is not configured. Set JWT_SECRET_KEY.'}), 503
+
+    body = request.get_json(silent=True) or {}
+    payload = mobile_auth.decode_token(body.get('refresh_token') or '', expected_type='refresh')
+    if payload is None:
+        return jsonify({'error': 'Invalid or expired refresh token'}), 401
+
+    # Re-read the user so revoked accounts and changed admin rights take effect
+    # on refresh rather than persisting for the life of the refresh token.
+    user = get_user(payload.get('sub') or '')
+    if not user:
+        return jsonify({'error': 'Invalid or expired refresh token'}), 401
+
+    return jsonify(mobile_auth.issue_token_pair(
+        user['username'], is_admin=bool(user['is_admin'])))
+
+
+@app.route('/api/mobile/me', methods=['GET'])
+def api_mobile_me():
+    """Identity behind the presented Bearer token."""
+    if AUTH_DISABLED:
+        return jsonify({'username': LOCAL_USERNAME, 'is_admin': True})
+
+    identity = _bearer_identity_safe()
+    if identity is None:
+        return jsonify({'error': 'Authentication required'}), 401
+    return jsonify({'username': identity['username'], 'is_admin': identity['is_admin']})
 
 
 @app.route('/api/config', methods=['GET'])

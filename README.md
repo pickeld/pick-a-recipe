@@ -183,6 +183,32 @@ If neither `AUTH_MODE=none` nor Authentik credentials are configured, nobody can
 sign in and the login page will say so — this is the default, and it fails closed
 on purpose.
 
+**Android app sign-in**
+
+The Android app in [`mobile/`](mobile/) authenticates with bearer tokens. Set a
+signing key to enable it:
+
+```bash
+JWT_SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
+```
+
+With `JWT_SECRET_KEY` unset the whole mobile surface stays disabled and those
+endpoints return 503. The app cannot hold the OIDC client secret, so it opens the
+system browser against Authentik, the server completes the code exchange, and the
+resulting token pair is handed back over a custom-scheme deep link
+(`par://auth/callback` by default, configurable with
+`MOBILE_DEEP_LINK_SCHEMES`). Tokens travel in the URL fragment, which browsers do
+not send to servers or leak via `Referer`.
+
+Access tokens last 15 minutes and refresh tokens 30 days; `POST
+/api/mobile/auth/refresh` re-reads the account on every refresh, so removing
+someone from the Authentik group takes effect within the access-token lifetime
+rather than lasting for the life of the refresh token. Group membership is
+enforced by the same check as the web flow.
+
+Bearer tokens are accepted on the existing API endpoints alongside cookie
+sessions; cookies take precedence when both are present.
+
 ### Settings
 
 | Setting | Description |
@@ -309,6 +335,8 @@ docker pull pickeld/pick-a-recipe:v1.0.0
 | `AUTHENTIK_CLIENT_SECRET` | Authentik OAuth2 client secret | — |
 | `AUTHENTIK_USER_GROUP` | Authentik group required for access | `pick-a-recipe-users` |
 | `AUTHENTIK_ADMIN_GROUP` | Authentik group granting admin rights | `admins` |
+| `JWT_SECRET_KEY` | Signing key for Android app tokens; unset disables mobile auth | — |
+| `MOBILE_DEEP_LINK_SCHEMES` | Comma-separated URL schemes the app may receive tokens on | `par` |
 | `SESSION_COOKIE_SECURE` | Set secure cookie flag (use with HTTPS) | `false` |
 
 ### Docker Compose (Using Docker Hub)

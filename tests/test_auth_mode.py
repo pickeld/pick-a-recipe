@@ -93,10 +93,8 @@ class TestAuthModeNone(unittest.TestCase):
         self.assertTrue(self.res['me']['auth_disabled'])
 
     def test_auth_status_reports_disabled(self):
-        self.assertEqual(
-            self.res['auth_status'],
-            {'sso_enabled': False, 'auth_disabled': True},
-        )
+        self.assertFalse(self.res['auth_status']['sso_enabled'])
+        self.assertTrue(self.res['auth_status']['auth_disabled'])
 
     def test_login_page_redirects_to_app(self):
         self.assertEqual(self.res['login_status'], 302)
@@ -173,10 +171,8 @@ class TestDefaultModeStillProtected(unittest.TestCase):
         self.assertEqual(self.res['login_status'], 200)
 
     def test_auth_status_reports_enabled_mode(self):
-        self.assertEqual(
-            self.res['auth_status'],
-            {'sso_enabled': False, 'auth_disabled': False},
-        )
+        self.assertFalse(self.res['auth_status']['sso_enabled'])
+        self.assertFalse(self.res['auth_status']['auth_disabled'])
 
 
 class TestInvalidAuthMode(unittest.TestCase):
