@@ -80,7 +80,10 @@ Sign-in is always required. `AUTH_MODE` picks where accounts come from:
 
 The Android app in `../mobile/` uses JWT bearer tokens instead of cookies,
 enabled by setting `JWT_SECRET_KEY`. Bearer and cookie auth run side by side on
-the existing endpoints, with cookies taking precedence.
+the existing endpoints, with cookies taking precedence. It picks its sign-in from
+`/api/auth/status`: `POST /api/mobile/auth/login` for local accounts, or the
+browser handshake for Authentik. Both modes are covered, so the published APK
+works against an instance with no identity provider.
 
 See the [root README](../README.md#authentication) for the full setup.
 

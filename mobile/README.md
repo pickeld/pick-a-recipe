@@ -1,8 +1,8 @@
 # Pick-a-Recipe — Android app
 
-Flutter client for the Pick-a-Recipe server. Signs in against the same
-Authentik tenant as the web UI and talks to the `/api/mobile/*` endpoints with
-JWT bearer tokens.
+Flutter client for the Pick-a-Recipe server. Asks which instance to talk to,
+then signs in whichever way that instance supports, and talks to the
+`/api/mobile/*` endpoints with JWT bearer tokens.
 
 ## Requirements
 
@@ -10,20 +10,43 @@ JWT bearer tokens.
 - A running Pick-a-Recipe server with `JWT_SECRET_KEY` set — without it the
   mobile endpoints return 503 and sign-in cannot complete
 
+## Which server, and which sign-in
+
+Neither is compiled in. Everyone running Pick-a-Recipe runs their own server
+with their own authentication, so a published APK cannot know either.
+
+On first launch the app asks for a server address. It types short — `https://`
+is assumed, a trailing slash is dropped, a port or subpath is kept — and nothing
+is saved until the address answers, so a typo leaves the form on screen instead
+of stranding the app somewhere unreachable. **Change** on the sign-in screen
+returns to it, clearing the stored tokens along with the address, since tokens
+mean nothing to a different instance.
+
+The app then reads `GET /api/auth/status` and offers only what that server has:
+
+| Server state | What the app shows |
+|--------------|--------------------|
+| `AUTH_MODE=local` | Username and password, posted to `/api/mobile/auth/login` |
+| `AUTH_MODE=authentik` | A button that opens Authentik in the system browser |
+| No account yet | A prompt to finish setup in a browser, and a re-check button |
+| `JWT_SECRET_KEY` unset | An explanation that app sign-in is switched off |
+
+A plain-`http://` address is allowed — plenty of self-hosted instances are HTTP
+on a home network, and refusing would leave those users with no app — but the
+password form says plainly that the password will travel unencrypted.
+
 ## Running
 
-The API host comes from the build flavor, so there is nothing to edit in the
-source:
-
 ```bash
-flutter run                                        # dev: http://10.0.2.2:5006
-flutter run --dart-define=FLAVOR=prod              # https://recipes.pickel.me
-flutter run --dart-define=API_BASE_URL=http://192.168.1.10:5006   # explicit host
+flutter run                                        # prefills http://10.0.2.2:5006
+flutter run --dart-define=FLAVOR=prod              # no prefill, as a release build
+flutter run --dart-define=API_BASE_URL=http://192.168.1.10:5006   # prefill a host
 ```
 
-`10.0.2.2` is the Android emulator's alias for the host machine. On a physical
-device, pass `API_BASE_URL` with your machine's LAN address. Cleartext HTTP is
-permitted only for those loopback/dev hosts; see
+`10.0.2.2` is the Android emulator's alias for the host machine; on a physical
+device use your machine's LAN address. Both only *prefill* the address field —
+the value the app uses is the one entered and stored on the device. Cleartext
+HTTP is permitted only for loopback/dev hosts; see
 `android/app/src/main/res/xml/network_security_config.xml`.
 
 ```bash
@@ -31,7 +54,22 @@ flutter test
 flutter analyze
 ```
 
-## How sign-in works
+## How password sign-in works
+
+Under `AUTH_MODE=local` there is no identity provider to visit, so the app posts
+the credentials itself:
+
+`POST /api/mobile/auth/login` with `{username, password}` returns the same token
+pair the browser flow ends with. The server verifies the Argon2id hash and
+applies the *same* throttle ladder as the web form, keyed on (IP, username) — so
+the app endpoint is not a way around the form's rate limit, or the reverse.
+Wrong password and unknown account are indistinguishable in the response.
+
+The endpoint is refused under `AUTH_MODE=authentik`: there, group membership
+governs access rather than any password an account happens to carry, so
+honouring one would be a way around single sign-on.
+
+## How Authentik sign-in works
 
 The app never handles the OIDC client secret, and no credentials are entered
 inside the app.
@@ -85,10 +123,15 @@ changing both.
 
 ```
 lib/src/
-  config/      build-flavor and API host resolution
-  core/        secure token storage, Dio client + auth interceptor, deep links
+  config/      build flavor and the address prefill
+  core/        secure token + server-address storage, Dio client + auth
+               interceptor, deep links
   features/
-    auth/      sign-in controller, callback parsing, login screen
+    auth/      server address and sign-in controllers, callback parsing,
+               login screen
     home/      signed-in landing screen
   router.dart  go_router with auth-driven redirects
 ```
+
+`Dio`'s base URL is derived from the stored address, so it is rebuilt when the
+server changes and no client is left pointing at the old one.

@@ -7,7 +7,12 @@ import 'token_store.dart';
 /// Backend paths for the mobile auth handshake.
 const String kRefreshPath = '/api/mobile/auth/refresh';
 const String kLoginUrlPath = '/api/mobile/auth/login-url';
+const String kPasswordLoginPath = '/api/mobile/auth/login';
 const String kMobileMePath = '/api/mobile/me';
+
+/// Unauthenticated: how a server describes the way in, before there is any
+/// session to describe it with.
+const String kAuthStatusPath = '/api/auth/status';
 
 /// Attaches the bearer token to outgoing requests and renews it once when the
 /// backend rejects it, so a 15-minute access token expiring mid-session is

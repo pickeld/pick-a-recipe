@@ -245,18 +245,27 @@ JWT_SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
 ```
 
 With `JWT_SECRET_KEY` unset the whole mobile surface stays disabled and those
-endpoints return 503. The app cannot hold the OIDC client secret, so it opens the
-system browser against Authentik, the server completes the code exchange, and the
-resulting token pair is handed back over a custom-scheme deep link
-(`par://auth/callback` by default, configurable with
-`MOBILE_DEEP_LINK_SCHEMES`). Tokens travel in the URL fragment, which browsers do
-not send to servers or leak via `Referer`.
+endpoints return 503.
+
+The app asks for your server's address on first launch — nothing is compiled in,
+since everyone runs their own instance — then reads `/api/auth/status` and offers
+whichever sign-in that instance has. Under `local` it posts the username and
+password to `/api/mobile/auth/login`, which applies the same throttle ladder as
+the web form, so neither is a way around the other. Under `authentik` a password
+is refused there: group membership governs access, not any password an account
+happens to carry.
+
+For Authentik the app cannot hold the OIDC client secret, so it opens the system
+browser, the server completes the code exchange, and the resulting token pair is
+handed back over a custom-scheme deep link (`par://auth/callback` by default,
+configurable with `MOBILE_DEEP_LINK_SCHEMES`). Tokens travel in the URL fragment,
+which browsers do not send to servers or leak via `Referer`.
 
 Access tokens last 15 minutes and refresh tokens 30 days; `POST
 /api/mobile/auth/refresh` re-reads the account on every refresh, so removing
-someone from the Authentik group takes effect within the access-token lifetime
-rather than lasting for the life of the refresh token. Group membership is
-enforced by the same check as the web flow.
+someone from the Authentik group — or deleting or demoting a local account —
+takes effect within the access-token lifetime rather than lasting for the life of
+the refresh token.
 
 Bearer tokens are accepted on the existing API endpoints alongside cookie
 sessions; cookies take precedence when both are present.

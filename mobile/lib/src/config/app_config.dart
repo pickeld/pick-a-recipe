@@ -5,12 +5,13 @@
 ///   flutter run  --dart-define=FLAVOR=dev
 ///   flutter build apk --release --dart-define=FLAVOR=prod
 ///
-/// API_BASE_URL optionally overrides the host for either flavor without a
-/// code change (useful for pointing a dev build at staging).
+/// The server address is *not* compiled in. Every user runs their own instance,
+/// so a published build cannot know where to point; it is entered in the app and
+/// kept by ServerStore. API_BASE_URL only prefills that field, to save typing
+/// during development.
 class AppConfig {
   const AppConfig({required this.flavor, this.apiBaseUrlOverride});
 
-  static const String _prodHost = 'https://recipes.pickel.me';
   // Android emulator alias for the host machine's loopback interface; the
   // Flask backend listens on port 5006 in local development.
   static const String _devHost = 'http://10.0.2.2:5006';
@@ -18,14 +19,16 @@ class AppConfig {
   /// Either 'dev' or 'prod'.
   final String flavor;
 
-  /// Optional compile-time override of the API base URL.
+  /// Optional compile-time prefill of the server address.
   final String? apiBaseUrlOverride;
 
   bool get isProd => flavor == 'prod';
 
-  /// Base URL of the pick-a-recipe backend, no trailing slash.
-  String get baseUrl =>
-      apiBaseUrlOverride ?? (isProd ? _prodHost : _devHost);
+  /// Prefills the server address field on first launch. Null for release
+  /// builds: guessing there would point somebody else's install at whichever
+  /// instance happened to be convenient when the APK was cut.
+  String? get suggestedServerUrl =>
+      apiBaseUrlOverride ?? (isProd ? null : _devHost);
 
   factory AppConfig.fromDefines() {
     const flavor = String.fromEnvironment('FLAVOR', defaultValue: 'dev');

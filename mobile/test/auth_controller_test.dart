@@ -18,12 +18,11 @@ void main() {
     launched = <Uri>[];
   });
 
-  /// Builds a container wired to canned HTTP replies and a recording launcher.
-  ProviderContainer harness(
-    Map<String, List<FakeReply>> replies, {
+  /// Builds a container wired to a fake transport and a recording launcher.
+  ProviderContainer harnessWith(
+    FakeAdapter adapter, {
     bool launchSucceeds = true,
   }) {
-    final FakeAdapter adapter = FakeAdapter(replies);
     final ProviderContainer container = ProviderContainer(
       overrides: [
         secureStoreProvider.overrideWithValue(secureStore),
@@ -44,6 +43,13 @@ void main() {
     );
     addTearDown(container.dispose);
     return container;
+  }
+
+  ProviderContainer harness(
+    Map<String, List<FakeReply>> replies, {
+    bool launchSucceeds = true,
+  }) {
+    return harnessWith(FakeAdapter(replies), launchSucceeds: launchSucceeds);
   }
 
   AuthController controllerOf(ProviderContainer c) =>
@@ -130,6 +136,141 @@ void main() {
       await controllerOf(c).signIn();
 
       expect(launched, hasLength(1));
+    });
+  });
+
+  group('signInWithPassword', () {
+    test('stores the pair the server returns and adopts the identity',
+        () async {
+      // No browser and no deep link on this path: the server hands the tokens
+      // straight back, so sign-in completes in one call.
+      final ProviderContainer c = harness(<String, List<FakeReply>>{
+        kPasswordLoginPath: <FakeReply>[
+          const FakeReply(200, <String, dynamic>{
+            'access_token': 'a1',
+            'refresh_token': 'r1',
+          }),
+        ],
+        kMobileMePath: <FakeReply>[
+          const FakeReply(200, <String, dynamic>{
+            'username': 'ada',
+            'is_admin': false,
+          }),
+        ],
+      });
+
+      await controllerOf(c).signInWithPassword(
+        username: 'ada',
+        password: 'correct horse battery',
+      );
+
+      final AuthState state = stateOf(c);
+      expect(state.status, AuthStatus.signedIn);
+      expect(state.username, 'ada');
+      expect(state.isAdmin, isFalse);
+      expect(launched, isEmpty);
+      final AuthTokens? stored = await c.read(tokenStoreProvider).read();
+      expect(stored?.refreshToken, 'r1');
+    });
+
+    test('shows the rejection and stores nothing', () async {
+      final ProviderContainer c = harness(<String, List<FakeReply>>{
+        kPasswordLoginPath: <FakeReply>[
+          const FakeReply(401, <String, dynamic>{
+            'error': 'Incorrect username or password.',
+          }),
+        ],
+      });
+
+      await controllerOf(c).signInWithPassword(
+        username: 'ada',
+        password: 'wrong',
+      );
+
+      expect(stateOf(c).status, AuthStatus.signedOut);
+      expect(stateOf(c).isBusy, isFalse);
+      expect(stateOf(c).errorMessage, contains('Incorrect username'));
+      expect(secureStore.values, isEmpty);
+    });
+
+    test('passes the throttle message through verbatim', () async {
+      // The wait is the useful part; a generic "try again" would leave the user
+      // tapping.
+      final ProviderContainer c = harness(<String, List<FakeReply>>{
+        kPasswordLoginPath: <FakeReply>[
+          const FakeReply(429, <String, dynamic>{
+            'error': 'Too many attempts. Try again in 8 seconds.',
+          }),
+        ],
+      });
+
+      await controllerOf(c).signInWithPassword(
+        username: 'ada',
+        password: 'wrong',
+      );
+
+      expect(stateOf(c).errorMessage, contains('8 seconds'));
+    });
+
+    test('explains a server that only does single sign-on', () async {
+      final ProviderContainer c = harness(<String, List<FakeReply>>{
+        kPasswordLoginPath: <FakeReply>[
+          const FakeReply(400, <String, dynamic>{
+            'error': 'This server uses single sign-on. Sign in with Authentik.',
+          }),
+        ],
+      });
+
+      await controllerOf(c).signInWithPassword(
+        username: 'ada',
+        password: 'whatever',
+      );
+
+      expect(stateOf(c).errorMessage, contains('single sign-on'));
+    });
+
+    test('discards a pair the server will not then vouch for', () async {
+      final ProviderContainer c = harness(<String, List<FakeReply>>{
+        kPasswordLoginPath: <FakeReply>[
+          const FakeReply(200, <String, dynamic>{
+            'access_token': 'a1',
+            'refresh_token': 'r1',
+          }),
+        ],
+        kMobileMePath: <FakeReply>[const FakeReply(401)],
+        kRefreshPath: <FakeReply>[const FakeReply(401)],
+      });
+
+      await controllerOf(c).signInWithPassword(
+        username: 'ada',
+        password: 'correct horse battery',
+      );
+
+      expect(stateOf(c).status, AuthStatus.signedOut);
+      expect(await c.read(tokenStoreProvider).read(), isNull);
+    });
+
+    test('a second submit while busy does not send a second attempt', () async {
+      // Otherwise a double tap spends two entries on the server's throttle
+      // ladder for one intended sign-in.
+      final FakeAdapter adapter = FakeAdapter(<String, List<FakeReply>>{
+        kPasswordLoginPath: <FakeReply>[
+          const FakeReply(401, <String, dynamic>{'error': 'nope'}),
+        ],
+      });
+      final ProviderContainer c = harnessWith(adapter);
+
+      final Future<void> first = controllerOf(c).signInWithPassword(
+        username: 'ada',
+        password: 'wrong',
+      );
+      final Future<void> second = controllerOf(c).signInWithPassword(
+        username: 'ada',
+        password: 'wrong',
+      );
+      await Future.wait(<Future<void>>[first, second]);
+
+      expect(adapter.callsTo(kPasswordLoginPath), 1);
     });
   });
 

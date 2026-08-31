@@ -67,3 +67,23 @@ class FakeAdapter implements HttpClientAdapter {
   @override
   void close({bool force = false}) {}
 }
+
+/// Adapter that fails every request, for the transport errors a canned reply
+/// cannot express: unreachable hosts, timeouts, rejected certificates.
+class ThrowingAdapter implements HttpClientAdapter {
+  ThrowingAdapter(this._error);
+
+  final DioException _error;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    throw _error;
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
