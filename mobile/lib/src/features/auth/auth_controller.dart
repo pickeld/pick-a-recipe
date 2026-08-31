@@ -34,6 +34,42 @@ class AuthController extends Notifier<AuthState> {
     );
   }
 
+  /// Signs in with an account held by the instance itself.
+  ///
+  /// Unlike the Authentik path this completes in one call, with no browser and
+  /// no deep link: the server hands back the token pair directly.
+  Future<void> signInWithPassword({
+    required String username,
+    required String password,
+  }) async {
+    if (state.isBusy) return;
+    state = state.copyWith(isBusy: true);
+
+    try {
+      final AuthTokens tokens = await _repository.signInWithPassword(
+        username: username,
+        password: password,
+      );
+      await _tokens.save(tokens);
+      final MobileIdentity? identity = await _repository.me();
+      if (identity == null) {
+        await _tokens.clear();
+        state = const AuthState.signedOut(
+          errorMessage: 'Signed in, but the server rejected the session. '
+              'Please try again.',
+        );
+        return;
+      }
+      state = AuthState(
+        status: AuthStatus.signedIn,
+        username: identity.username,
+        isAdmin: identity.isAdmin,
+      );
+    } on AuthApiException catch (error) {
+      state = state.copyWith(isBusy: false, errorMessage: error.message);
+    }
+  }
+
   /// Opens the system browser at Authentik. Control returns to the app through
   /// the deep link handled by [completeSignIn].
   Future<void> signIn() async {

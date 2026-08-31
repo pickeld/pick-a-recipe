@@ -771,19 +771,23 @@ def api_setup():
     return jsonify({'user': user['username'], 'is_admin': True})
 
 
-@app.route('/auth/local/login', methods=['POST'])
-def auth_local_login():
-    """Sign in with a username and password held by this app."""
-    if not LOCAL_AUTH:
-        return _login_failed('Password sign-in is disabled on this instance.', 400)
-    if _setup_required():
-        return redirect(url_for('setup'))
+class _LoginRejected(Exception):
+    """A refused sign-in, carrying what the client should be told."""
 
-    payload = request.get_json(silent=True) if request.is_json else None
-    source = payload if isinstance(payload, dict) else request.form
-    username = str(source.get('username') or '').strip()
-    password = str(source.get('password') or '')
+    def __init__(self, message: str, status: int, retry_after: int | None = None):
+        super().__init__(message)
+        self.message = message
+        self.status = status
+        self.retry_after = retry_after
 
+
+def _authenticate_password(username: str, password: str) -> dict:
+    """Return the account for valid credentials, or raise _LoginRejected.
+
+    Shared by the browser form and the Android app so both are slowed by the
+    same throttle ladder — otherwise the app endpoint would be an unthrottled
+    way around the form's.
+    """
     # Keyed on both, so guessing many passwords for one account and one password
     # across many accounts are both slowed. The client cannot influence the key
     # beyond the username it is already trying.
@@ -792,11 +796,9 @@ def auth_local_login():
     if wait > 0:
         auth_log.warning('sign-in throttled for %r from %s',
                          username, _client_ip())
-        return _login_failed(
+        raise _LoginRejected(
             f'Too many attempts. Try again in {int(wait) + 1} seconds.',
-            429,
-            retry_after=int(wait) + 1,
-        )
+            429, retry_after=int(wait) + 1)
 
     # Logged as separate reasons on purpose. The response cannot distinguish
     # them without telling an attacker which usernames exist, but the operator
@@ -810,22 +812,43 @@ def auth_local_login():
         login_throttle.record_failure(throttle_key)
         auth_log.warning('sign-in failed: no such account %r from %s',
                          username, _client_ip())
-        return _login_failed(_INVALID_CREDENTIALS, 401)
+        raise _LoginRejected(_INVALID_CREDENTIALS, 401)
 
     if not passwords.verify(user.get('password_hash'), password):
         login_throttle.record_failure(throttle_key)
         auth_log.warning('sign-in failed: wrong password for %s from %s',
                          user['username'], _client_ip())
-        return _login_failed(_INVALID_CREDENTIALS, 401)
+        raise _LoginRejected(_INVALID_CREDENTIALS, 401)
 
     login_throttle.reset(throttle_key)
-    auth_log.info('signed in: %s from %s', user['username'], _client_ip())
 
     # Cost parameters may have risen since this hash was stored; the password is
     # in hand exactly once, so this is the only chance to upgrade it.
     if passwords.needs_rehash(user['password_hash']):
         set_user_password(user['username'], passwords.hash_password(password))
+    return user
 
+
+@app.route('/auth/local/login', methods=['POST'])
+def auth_local_login():
+    """Sign in with a username and password held by this app."""
+    if not LOCAL_AUTH:
+        return _login_failed('Password sign-in is disabled on this instance.', 400)
+    if _setup_required():
+        return redirect(url_for('setup'))
+
+    payload = request.get_json(silent=True) if request.is_json else None
+    source = payload if isinstance(payload, dict) else request.form
+    username = str(source.get('username') or '').strip()
+    password = str(source.get('password') or '')
+
+    try:
+        user = _authenticate_password(username, password)
+    except _LoginRejected as rejected:
+        return _login_failed(rejected.message, rejected.status,
+                             retry_after=rejected.retry_after)
+
+    auth_log.info('signed in: %s from %s', user['username'], _client_ip())
     _establish_session(user['username'], is_admin=bool(user['is_admin']))
     if _wants_json():
         return jsonify({
@@ -1594,9 +1617,50 @@ def api_auth_status():
 
 
 # ===== Mobile (Android app) auth =====
-# The app cannot hold the OIDC client secret, so it opens the system browser
-# against Authentik and the server completes the code exchange, handing back a
-# JWT pair over a custom-scheme deep link. Disabled unless JWT_SECRET_KEY is set.
+# Two ways in, matching the two AUTH_MODEs. Under `local` the app posts a
+# username and password straight to /api/mobile/auth/login. Under `authentik`
+# the app cannot hold the OIDC client secret, so it opens the system browser and
+# the server completes the code exchange, handing back a JWT pair over a
+# custom-scheme deep link. Both are disabled unless JWT_SECRET_KEY is set.
+
+@app.route('/api/mobile/auth/login', methods=['POST'])
+def api_mobile_password_login():
+    """Exchange a username and password for a token pair.
+
+    Only under AUTH_MODE=local. Under Authentik the password, if an account even
+    has one, is not what governs access — group membership is — so accepting one
+    here would be a way around single sign-on.
+    """
+    if not mobile_auth.mobile_auth_enabled():
+        return jsonify({'error': 'Mobile auth is not configured. Set JWT_SECRET_KEY.'}), 503
+    if not LOCAL_AUTH:
+        return jsonify({
+            'error': 'This server uses single sign-on. Sign in with Authentik.',
+        }), 400
+    if _setup_required():
+        return jsonify({
+            'error': 'This server has no account yet. Open it in a browser to '
+                     'finish setup.',
+            'setup_required': True,
+        }), 409
+
+    payload = request.get_json(silent=True)
+    source = payload if isinstance(payload, dict) else {}
+    username = str(source.get('username') or '').strip()
+    password = str(source.get('password') or '')
+
+    try:
+        user = _authenticate_password(username, password)
+    except _LoginRejected as rejected:
+        response = jsonify({'error': rejected.message})
+        if rejected.retry_after is not None:
+            response.headers['Retry-After'] = str(rejected.retry_after)
+        return response, rejected.status
+
+    auth_log.info('app sign-in: %s from %s', user['username'], _client_ip())
+    return jsonify(mobile_auth.issue_token_pair(
+        user['username'], is_admin=bool(user['is_admin'])))
+
 
 @app.route('/api/mobile/auth/login-url', methods=['GET'])
 def api_mobile_login_url():
