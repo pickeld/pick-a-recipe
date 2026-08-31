@@ -33,7 +33,15 @@ The app then reads `GET /api/auth/status` and offers only what that server has:
 
 A plain-`http://` address is allowed — plenty of self-hosted instances are HTTP
 on a home network, and refusing would leave those users with no app — but the
-password form says plainly that the password will travel unencrypted.
+address is shown with an open padlock and the password form says plainly that the
+password will travel unencrypted.
+
+That required permitting cleartext in `res/xml/network_security_config.xml`,
+which is a deliberate exception to the HTTPS-only default: Android's policy takes
+exact hosts rather than CIDR blocks, so "cleartext only on a private network"
+cannot be expressed. Certificate validation is *not* relaxed — a self-signed
+HTTPS certificate is still rejected, and the app says so rather than failing
+silently.
 
 ## Running
 
@@ -45,9 +53,7 @@ flutter run --dart-define=API_BASE_URL=http://192.168.1.10:5006   # prefill a ho
 
 `10.0.2.2` is the Android emulator's alias for the host machine; on a physical
 device use your machine's LAN address. Both only *prefill* the address field —
-the value the app uses is the one entered and stored on the device. Cleartext
-HTTP is permitted only for loopback/dev hosts; see
-`android/app/src/main/res/xml/network_security_config.xml`.
+the value the app uses is the one entered and stored on the device.
 
 ```bash
 flutter test

@@ -1,11 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Production traffic is HTTPS-only. Cleartext is permitted only for
-         local development hosts (Android emulator host alias / localhost). -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-    </domain-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <!-- Cleartext is permitted, which is a deliberate exception to the
+         HTTPS-only default.
+
+         This app connects to a server the user names at runtime, and a large
+         share of self-hosted Pick-a-Recipe instances are plain HTTP on a home
+         network. Android's policy cannot express "cleartext only for private
+         address ranges" — it takes exact hosts, not CIDR blocks — so the choice
+         is between permitting cleartext and shipping an app those users cannot
+         connect to at all.
+
+         The trade-off is surfaced rather than hidden: the sign-in screen marks
+         an http:// address with an open padlock and states that the password
+         will travel unencrypted. HTTPS remains what an address without a scheme
+         resolves to, so the short form nobody thinks about is the safe one.
+
+         Certificate validation is NOT relaxed anywhere: a self-signed HTTPS
+         certificate is still rejected, and the app says so. -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
