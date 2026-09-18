@@ -219,6 +219,31 @@ def to_openai_json_schema(model: type[BaseModel]) -> dict:
     return _strictify(schema)
 
 
+def _strip_additional_properties(node: Any) -> Any:
+    """Recursively drop ``additionalProperties`` from a JSON schema.
+
+    Pydantic's ``extra="forbid"`` emits ``additionalProperties: false``, which the
+    Gemini Developer API rejects with ``400 INVALID_ARGUMENT`` (``Unknown name
+    "additional_properties"``). The SDK forwards it verbatim, so we scrub it before
+    the model is handed to the Gemini structured-output path (issue #29).
+    """
+    if isinstance(node, dict):
+        node.pop("additionalProperties", None)
+        for value in node.values():
+            _strip_additional_properties(value)
+    elif isinstance(node, list):
+        for value in node:
+            _strip_additional_properties(value)
+    return node
+
+
+def to_gemini_json_schema(model: type[BaseModel]) -> dict:
+    """JSON Schema for Gemini ``response_schema`` (no ``additionalProperties``)."""
+    schema = model.model_json_schema()
+    schema.pop("$schema", None)
+    return _strip_additional_properties(schema)
+
+
 RECIPE_JSON_SCHEMA = to_openai_json_schema(RecipeExtraction)
 NUTRITION_JSON_SCHEMA = to_openai_json_schema(YieldNutritionEstimate)
 VISUAL_JSON_SCHEMA = to_openai_json_schema(VisualTextExtraction)
