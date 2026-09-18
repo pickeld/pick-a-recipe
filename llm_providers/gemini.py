@@ -44,14 +44,14 @@ class GeminiImageSelector(LLMImageSelector):
         parts.append(types.Part.from_text(text=prompt))
 
         def _call(model: str):
-            from recipe_schema import FrameSelection
+            from recipe_schema import FrameSelection, to_gemini_json_schema
 
             return client.models.generate_content(
                 model=model,
                 contents=[types.Content(role="user", parts=parts)],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=FrameSelection,
+                    response_schema=to_gemini_json_schema(FrameSelection),
                 ),
             )
 

@@ -11,6 +11,7 @@ from recipe_schema import (
     VISUAL_JSON_SCHEMA,
     VisualTextExtraction,
     parse_visual_text,
+    to_gemini_json_schema,
 )
 
 logger = setup_logger(__name__)
@@ -254,7 +255,7 @@ class Transcriber:
                 ],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=VisualTextExtraction,
+                    response_schema=to_gemini_json_schema(VisualTextExtraction),
                 ),
             )
 

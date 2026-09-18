@@ -19,6 +19,7 @@ from recipe_schema import (
     parse_recipe_extraction,
     parse_yield_nutrition,
     recipe_dict_from_extraction,
+    to_gemini_json_schema,
 )
 from nutrition import lookup_recipe_nutrition
 from units import normalize_ingredient_units
@@ -269,7 +270,7 @@ class Chef:
             if schema_model is not None:
                 kwargs["config"] = types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=schema_model,
+                    response_schema=to_gemini_json_schema(schema_model),
                 )
             resp = self.client.models.generate_content(**kwargs)
             raw_text = resp.text or ""
