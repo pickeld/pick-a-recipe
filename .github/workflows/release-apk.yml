@@ -14,6 +14,13 @@
 # The signing identity cannot be changed once users have installed a build:
 # Android refuses an update signed with a different key. Treat the keystore as
 # unrecoverable if lost.
+#
+# Runs on the self-hosted srv2 runner. Only `release: published` and
+# `workflow_dispatch` trigger this, both of which require write access to the
+# repo — no `pull_request` trigger. That matters because this repo is public:
+# a fork PR running on a self-hosted runner would execute untrusted code on
+# srv2 and could read the signing secrets. Keep it that way; pre-merge checks
+# belong in ci.yml on GitHub-hosted runners.
 name: Release APK
 
 on:
@@ -24,6 +31,10 @@ on:
       tag:
         description: 'Existing release tag to attach an APK to (e.g. v1.6.0)'
         required: true
+      dry_run:
+        description: 'Build and sign only — leave the release untouched'
+        type: boolean
+        default: false
 
 concurrency:
   group: release-apk-${{ github.event.release.tag_name || inputs.tag }}
@@ -35,7 +46,10 @@ permissions:
 jobs:
   apk:
     name: Build and attach APK
-    runs-on: ubuntu-latest
+    # srv2, the only runner registered on this repo. Unlike ubuntu-latest it
+    # has no preinstalled JDK or Android SDK; both come from the shared
+    # ~/android-toolchain provisioned on the host (see the toolchain step).
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -63,11 +77,39 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+      # No actions/setup-java here: srv2 already carries a Temurin 17 JDK and
+      # the Android SDK (build-tools 35, platforms 34-36) under
+      # ~/android-toolchain, shared with the sibling pick-a-print runner.
+      # Downloading a second JDK per run would only burn disk on a host that
+      # runs near capacity. The runner's own .env exports these, but it only
+      # rereads that file when the service restarts, so resolve them here too
+      # and fail with something readable instead of a Gradle stack trace.
+      - name: Locate the Android toolchain
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$HOME/android-toolchain"
+          SDK="${ANDROID_SDK_ROOT:-$TOOLCHAIN/sdk}"
+          JDK="${JAVA_HOME:-$(find "$TOOLCHAIN" -maxdepth 1 -name 'jdk-*' | sort -V | tail -1)}"
+
+          for path in "$SDK/build-tools" "$SDK/platforms" "$JDK/bin/java"; do
+            if [[ ! -e "$path" ]]; then
+              echo "::error::Android toolchain incomplete on this runner: $path is missing." \
+                   "Reprovision ~/android-toolchain on srv2 (JDK 17 + SDK build-tools/platform 35)."
+              exit 1
+            fi
+          done
+
+          {
+            echo "JAVA_HOME=$JDK"
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+          } >> "$GITHUB_ENV"
+          echo "$JDK/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+          "$JDK/bin/java" -version
+          echo "build-tools: $(ls "$SDK/build-tools" | tr '\n' ' ')"
+          echo "platforms:   $(ls "$SDK/platforms" | tr '\n' ' ')"
 
       - name: Set up Flutter
         # Third-party action, pinned to a commit rather than a movable tag.
@@ -75,7 +117,12 @@ jobs:
         with:
           flutter-version: 3.44.8
           channel: stable
-          cache: true
+          # No cache: srv2 is persistent, so the SDK it unpacks into the
+          # runner's tool cache — plus ~/.pub-cache and ~/.gradle — already
+          # survive between runs on local disk. Routing gigabytes through
+          # GitHub's Actions cache on top of that is pure overhead, and is
+          # what exhausted the sibling repo's Actions storage quota.
+          cache: false
 
       - name: Restore signing keystore
         working-directory: mobile/android
@@ -142,6 +189,10 @@ jobs:
           ls -lh "$NAME"
 
       - name: Attach to the release
+        # dry_run exists to prove a runner can still build — after a toolchain
+        # change, say — without republishing an asset users may already have.
+        # It is unset for `release` events, which leaves the condition true.
+        if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release.outputs.tag }}
