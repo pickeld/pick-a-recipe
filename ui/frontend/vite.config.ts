@@ -60,6 +60,9 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Adds the push / notificationclick listeners to the generated worker.
+        // Kept as an import so everything below stays stock Workbox output.
+        importScripts: ['/push-sw.js'],
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         navigateFallbackDenylist: [
           /^\/api\//,

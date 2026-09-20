@@ -24,6 +24,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 import mobile_auth
 import passwords
 import login_throttle
+import push
 from helpers import setup_logger
 from database import (
     init_db, load_config, save_config,
@@ -2219,7 +2220,20 @@ def cancel_pending_upload_api(upload_id):
                     'job_id': result.get('job_id')})
 
 
-# ===== Legacy API (kept for backward compatibility) =====
+# ===== Push notifications =====
+
+@app.route('/api/push/vapid-key', methods=['GET'])
+@api_login_required
+def push_vapid_key():
+    """Public half of the VAPID pair, for PushManager.subscribe().
+
+    Public by design: this is the applicationServerKey every subscribing
+    browser has to see. An empty string means notifications are unavailable on
+    this install (pywebpush missing, or the generated key could not be saved),
+    which the UI explains instead of offering a toggle that cannot work.
+    """
+    return jsonify({'key': push.get_public_key()})
+
 
 @app.route('/api/push/subscribe', methods=['POST'])
 @api_login_required
@@ -2230,7 +2244,11 @@ def push_subscribe():
     keys = sub.get('keys') or {}
     if not endpoint or not keys.get('p256dh') or not keys.get('auth'):
         return jsonify({'error': 'Invalid subscription'}), 400
-    ok = save_push_subscription(session['user'], endpoint, keys['p256dh'], keys['auth'])
+    # _current_username() rather than session['user']: api_login_required also
+    # accepts a Bearer token, and the Android app has no session cookie to read.
+    ok = save_push_subscription(
+        _current_username(), endpoint, keys['p256dh'], keys['auth']
+    )
     return jsonify({'status': 'subscribed' if ok else 'error'})
 
 
@@ -2240,9 +2258,13 @@ def push_unsubscribe():
     data = request.get_json() or {}
     endpoint = data.get('endpoint')
     if endpoint:
-        delete_push_subscription(endpoint)
+        # Scoped to the caller: the endpoint arrives in the request body, so an
+        # unscoped delete would let any signed-in user silence another's device.
+        delete_push_subscription(endpoint, username=_current_username())
     return jsonify({'status': 'unsubscribed'})
 
+
+# ===== Legacy API (kept for backward compatibility) =====
 
 @app.route('/api/process', methods=['POST'])
 @api_login_required

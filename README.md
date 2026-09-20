@@ -401,7 +401,46 @@ docker pull pickeld/pick-a-recipe:v1.0.0
 | `AUTHENTIK_ADMIN_GROUP` | Authentik group granting admin rights | `admins` |
 | `JWT_SECRET_KEY` | Signing key for Android app tokens; unset disables mobile auth | — |
 | `MOBILE_DEEP_LINK_SCHEMES` | Comma-separated URL schemes the app may receive tokens on | `par` |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Web Push signing pair ([details](#notifications)) | Generated on first use |
+| `VAPID_SUBJECT` | Contact URI push services can use to reach you | `mailto:admin@pick-a-recipe.invalid` |
 | `SESSION_COOKIE_SECURE` | Set secure cookie flag (use with HTTPS) | `false` |
+
+### Notifications
+
+Extraction takes minutes, so the useful signal — your recipe is saved, it
+failed, or it is waiting on you — lands after you have already closed the tab.
+Turn on **Settings → Notifications** in each browser you want notified, and the
+app pushes that signal to the OS.
+
+Approvals are the ones worth enabling: they expire, and a missed one discards
+the extraction. That notification carries the deadline and is not delivered
+after the window closes.
+
+Requires HTTPS (or localhost) — browsers refuse push on plain HTTP. On iOS, add
+the app to the Home Screen first; Safari only allows push for installed PWAs.
+
+Nothing to configure: the server mints a VAPID key pair on first use and stores
+it in the database. Set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` to manage the
+pair yourself instead — they take precedence when both are set. Generate one
+with:
+
+```bash
+python -c "
+import base64
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+k = ec.generate_private_key(ec.SECP256R1())
+b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+print('VAPID_PUBLIC_KEY=' + b64(k.public_key().public_bytes(
+    serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)))
+print('VAPID_PRIVATE_KEY=' + b64(
+    k.private_numbers().private_value.to_bytes(32, 'big')))
+"
+```
+
+Changing the pair invalidates every existing subscription — each browser has to
+re-enable notifications — so keep it out of source control and treat it like
+any other credential.
 
 ### Docker Compose (Using Docker Hub)
 

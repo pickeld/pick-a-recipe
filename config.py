@@ -96,6 +96,11 @@ DEFAULT_CONFIG = {
     "yt_dlp_cookies_file": "",
     "yt_dlp_cookies_browser": "",
     "max_concurrent_jobs": "3",
+    # Web Push signing pair. Never edited in Settings and never committed:
+    # ui/push.py generates one on first use, or reads it from the environment.
+    "vapid_public_key": "",
+    "vapid_private_key": "",
+    "vapid_subject": "",
 }
 
 
@@ -292,6 +297,23 @@ class Config:
     @property
     def YT_DLP_COOKIES_BROWSER(self) -> str:
         return self._get('yt_dlp_cookies_browser', DEFAULT_CONFIG['yt_dlp_cookies_browser'])
+
+    @property
+    def VAPID_PUBLIC_KEY(self) -> str:
+        return self._get('vapid_public_key', DEFAULT_CONFIG['vapid_public_key'])
+
+    @property
+    def VAPID_PRIVATE_KEY(self) -> str:
+        """Web Push signing key. Generated at runtime, never hardcoded.
+
+        ui/push.py owns creation and prefers VAPID_PRIVATE_KEY from the
+        environment, falling back to this stored value.
+        """
+        return self._get('vapid_private_key', DEFAULT_CONFIG['vapid_private_key'])
+
+    @property
+    def VAPID_SUBJECT(self) -> str:
+        return self._get('vapid_subject', DEFAULT_CONFIG['vapid_subject'])
 
     @property
     def MAX_CONCURRENT_JOBS(self) -> int:

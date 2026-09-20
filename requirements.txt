@@ -11,3 +11,6 @@ authlib
 PyJWT
 argon2-cffi
 beautifulsoup4
+# Web Push for job-outcome notifications. Brings py-vapid and cryptography,
+# which ui/push.py also uses to mint the VAPID key pair.
+pywebpush
