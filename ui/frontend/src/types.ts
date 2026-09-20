@@ -260,11 +260,13 @@ export interface ReuploadResult {
 
 /** Every value is stored & returned as a string by the backend. */
 export interface AppConfig {
-  llm_provider: 'openai' | 'gemini'
+  llm_provider: 'openai' | 'gemini' | 'openrouter'
   openai_api_key: string
   openai_model: string
   gemini_api_key: string
   gemini_model: string
+  openrouter_api_key: string
+  openrouter_model: string
   recipe_lang: string
   mealie_api_key: string
   mealie_host: string

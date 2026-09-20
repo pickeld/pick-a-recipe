@@ -79,6 +79,8 @@ DEFAULT_CONFIG = {
     "openai_model": "gpt-5-mini-2025-08-07",
     "gemini_api_key": "",
     "gemini_model": "gemini-2.5-flash",
+    "openrouter_api_key": "",
+    "openrouter_model": "openai/gpt-4o-mini",
     "recipe_lang": "hebrew",
     "mealie_api_key": "",
     "mealie_host": "",
@@ -218,6 +220,14 @@ class Config:
     @property
     def GEMINI_MODEL(self) -> str:
         return self._get('gemini_model', DEFAULT_CONFIG['gemini_model'])
+
+    @property
+    def OPENROUTER_API_KEY(self) -> str:
+        return self._get('openrouter_api_key', DEFAULT_CONFIG['openrouter_api_key'])
+
+    @property
+    def OPENROUTER_MODEL(self) -> str:
+        return self._get('openrouter_model', DEFAULT_CONFIG['openrouter_model'])
 
     @property
     def RECIPE_LANG(self) -> str:

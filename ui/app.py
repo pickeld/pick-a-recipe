@@ -1115,6 +1115,8 @@ def settings():
         config['openai_model'] = request.form.get('openai_model', '')
         config['gemini_api_key'] = request.form.get('gemini_api_key', '')
         config['gemini_model'] = request.form.get('gemini_model', '')
+        config['openrouter_api_key'] = request.form.get('openrouter_api_key', '')
+        config['openrouter_model'] = request.form.get('openrouter_model', '')
         config['recipe_lang'] = request.form.get('recipe_lang', 'hebrew')
         config['mealie_api_key'] = request.form.get('mealie_api_key', '')
         config['mealie_host'] = request.form.get('mealie_host', '')

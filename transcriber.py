@@ -213,6 +213,8 @@ class Transcriber:
             return self._extract_visual_text_gemini()
         elif config.LLM_PROVIDER == "openai":
             return self._extract_visual_text_openai()
+        elif config.LLM_PROVIDER == "openrouter":
+            return self._extract_visual_text_openrouter()
         else:
             raise ValueError(
                 f"Visual text extraction not supported for provider: {config.LLM_PROVIDER}")
@@ -313,6 +315,66 @@ class Transcriber:
 
         response, _ = call_with_model_fallback("openai", config.OPENAI_MODEL, _call)
         return _plain_visual_text(response.output_text or "")
+
+    def _extract_visual_text_openrouter(self) -> str:
+        """Extract visual text via an OpenRouter vision model using extracted frames.
+
+        OpenRouter exposes the OpenAI Chat Completions dialect, so this mirrors
+        the OpenAI frame-based path but calls ``chat.completions.create`` with a
+        ``response_format`` structured-output request.
+        """
+        import base64
+        from llm_openrouter import make_openrouter_client
+
+        client = make_openrouter_client()
+
+        # Extract frames from video
+        frames = self._extract_frames(num_frames=8)
+        if not frames:
+            raise RuntimeError("No frames could be extracted from video")
+
+        # Encode frames as base64
+        image_contents = []
+        for frame_path in frames:
+            with open(frame_path, "rb") as f:
+                b64_image = base64.standard_b64encode(f.read()).decode("utf-8")
+            image_contents.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{b64_image}",
+                    "detail": "high"
+                }
+            })
+
+        prompt = self._get_visual_text_prompt()
+
+        def _call(model: str):
+            return client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            *image_contents
+                        ]
+                    }
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "visual_text",
+                        "strict": True,
+                        "schema": VISUAL_JSON_SCHEMA,
+                    }
+                },
+            )
+
+        response, _ = call_with_model_fallback(
+            "openrouter", config.OPENROUTER_MODEL, _call
+        )
+        content = response.choices[0].message.content or ""
+        return _plain_visual_text(content)
 
     def _extract_frames(self, num_frames: int = 8) -> list[str]:
         """Extract evenly-spaced frames from video using ffmpeg."""

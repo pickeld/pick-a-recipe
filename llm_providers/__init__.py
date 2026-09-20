@@ -6,6 +6,7 @@ Provides a unified interface for different LLM vision providers.
 from .base import LLMImageSelector
 from .gemini import GeminiImageSelector
 from .openai import OpenAIImageSelector
+from .openrouter import OpenRouterImageSelector
 from config import config
 
 
@@ -23,6 +24,8 @@ def get_image_selector() -> LLMImageSelector:
         return GeminiImageSelector()
     elif config.LLM_PROVIDER == "openai":
         return OpenAIImageSelector()
+    elif config.LLM_PROVIDER == "openrouter":
+        return OpenRouterImageSelector()
     else:
         raise ValueError(f"Unsupported LLM provider: {config.LLM_PROVIDER}")
 
@@ -31,5 +34,6 @@ __all__ = [
     "LLMImageSelector",
     "GeminiImageSelector", 
     "OpenAIImageSelector",
+    "OpenRouterImageSelector",
     "get_image_selector",
 ]

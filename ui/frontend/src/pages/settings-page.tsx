@@ -230,7 +230,9 @@ export function SettingsPage() {
           <Field label="Provider">
             <Select
               value={provider}
-              onValueChange={v => set('llm_provider', v as 'openai' | 'gemini')}
+              onValueChange={v =>
+                set('llm_provider', v as 'openai' | 'gemini' | 'openrouter')
+              }
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -238,6 +240,7 @@ export function SettingsPage() {
               <SelectContent>
                 <SelectItem value="openai">OpenAI</SelectItem>
                 <SelectItem value="gemini">Google Gemini</SelectItem>
+                <SelectItem value="openrouter">OpenRouter</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -285,6 +288,35 @@ export function SettingsPage() {
                   onChange={e => set('gemini_model', e.target.value)}
                 />
               </Field>
+            </div>
+          )}
+
+          {provider === 'openrouter' && (
+            <div className="flex flex-col gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="OpenRouter API Key">
+                  <Input
+                    type="password"
+                    placeholder="sk-or-..."
+                    autoComplete="off"
+                    value={get('openrouter_api_key')}
+                    onChange={e => set('openrouter_api_key', e.target.value)}
+                  />
+                </Field>
+                <Field label="OpenRouter Model">
+                  <Input
+                    type="text"
+                    placeholder="openai/gpt-4o-mini"
+                    autoComplete="off"
+                    value={get('openrouter_model')}
+                    onChange={e => set('openrouter_model', e.target.value)}
+                  />
+                </Field>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Use a vision-capable model slug (e.g. openai/gpt-4o-mini or
+                google/gemini-2.5-flash). Get a key at openrouter.ai/keys.
+              </p>
             </div>
           )}
         </CardContent>

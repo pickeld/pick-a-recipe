@@ -20,6 +20,7 @@
                 <select id="llm_provider" name="llm_provider" class="form-select">
                     <option value="openai" {% if config.llm_provider == 'openai' %}selected{% endif %}>OpenAI</option>
                     <option value="gemini" {% if config.llm_provider == 'gemini' %}selected{% endif %}>Google Gemini</option>
+                    <option value="openrouter" {% if config.llm_provider == 'openrouter' %}selected{% endif %}>OpenRouter</option>
                 </select>
             </div>
 
@@ -55,6 +56,24 @@
                                autocomplete="off" autocapitalize="none" spellcheck="false">
                     </div>
                 </div>
+            </div>
+
+            <div class="provider-fields" data-provider="openrouter" {% if config.llm_provider != 'openrouter' %}hidden{% endif %}>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="openrouter_api_key">OpenRouter API Key</label>
+                        <input type="password" id="openrouter_api_key" name="openrouter_api_key"
+                               value="{{ config.openrouter_api_key }}" placeholder="sk-or-..."
+                               autocomplete="off" autocapitalize="none" spellcheck="false">
+                    </div>
+                    <div class="form-group">
+                        <label for="openrouter_model">OpenRouter Model</label>
+                        <input type="text" id="openrouter_model" name="openrouter_model"
+                               value="{{ config.openrouter_model }}" placeholder="openai/gpt-4o-mini"
+                               autocomplete="off" autocapitalize="none" spellcheck="false">
+                    </div>
+                </div>
+                <small class="form-hint">Use a vision-capable model slug (e.g. <code>openai/gpt-4o-mini</code> or <code>google/gemini-2.5-flash</code>). Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>. Stored in this instance's database, never in source code.</small>
             </div>
         </div>
 

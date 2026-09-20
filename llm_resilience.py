@@ -23,6 +23,9 @@ logger = setup_logger(__name__)
 FALLBACK_MODELS = {
     "openai": ["gpt-5-mini-2025-08-07", "gpt-4o-mini", "gpt-4o"],
     "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+    # OpenRouter model slugs are namespaced (vendor/model). These vision-capable
+    # defaults back up whatever slug the user configured in Settings.
+    "openrouter": ["openai/gpt-4o-mini", "google/gemini-2.5-flash"],
 }
 
 _MODEL_GONE_MARKERS = (

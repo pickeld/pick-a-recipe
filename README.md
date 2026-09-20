@@ -19,7 +19,7 @@ Pick-a-Recipe is a Python application that:
 1. **Downloads videos** from TikTok, YouTube, Instagram, and other platforms using `yt-dlp`
 2. **Transcribes audio** using Whisper AI (via `faster-whisper`)
 3. **Extracts on-screen text** (ingredients, instructions) using vision-capable LLMs
-4. **Generates structured recipes** using AI (OpenAI GPT or Google Gemini)
+4. **Generates structured recipes** using AI (OpenAI GPT, Google Gemini, or OpenRouter)
 5. **Uploads to recipe managers** - supports [Tandoor](https://tandoor.dev/) and [Mealie](https://mealie.io/)
 
 ### Features
@@ -39,7 +39,7 @@ Pick-a-Recipe is a Python application that:
 
 - Python 3.11+
 - FFmpeg (for video/audio processing)
-- API key for OpenAI or Google Gemini
+- API key for OpenAI, Google Gemini, or OpenRouter
 - Self-hosted Tandoor or Mealie instance (optional)
 
 ## Installation
@@ -274,11 +274,13 @@ sessions; cookies take precedence when both are present.
 
 | Setting | Description |
 |---------|-------------|
-| **LLM Provider** | Choose between OpenAI or Google Gemini |
+| **LLM Provider** | Choose between OpenAI, Google Gemini, or OpenRouter |
 | **OpenAI API Key** | Your OpenAI API key (required if using OpenAI) |
 | **OpenAI Model** | Model to use (default: `gpt-5-mini-2025-08-07`) |
 | **Gemini API Key** | Your Google Gemini API key (required if using Gemini) |
 | **Gemini Model** | Model to use (default: `gemini-2.5-flash`) |
+| **OpenRouter API Key** | Your [OpenRouter](https://openrouter.ai/keys) API key (required if using OpenRouter) |
+| **OpenRouter Model** | Vision-capable model slug (default: `openai/gpt-4o-mini`) |
 | **Recipe Language** | Target language for recipe output (e.g., `hebrew`, `english`) |
 | **Target Language Code** | ISO language code for transcription (e.g., `he`, `en`) |
 | **Whisper Model** | Whisper model size (`tiny`, `small`, `medium`, `large`) |
@@ -347,7 +349,8 @@ pick-a-recipe/
 ├── llm_providers/       # LLM provider implementations
 │   ├── base.py
 │   ├── openai.py
-│   └── gemini.py
+│   ├── gemini.py
+│   └── openrouter.py
 ├── ui/                  # Flask web UI
 │   ├── app.py           # Flask application
 │   ├── database.py      # SQLite database management

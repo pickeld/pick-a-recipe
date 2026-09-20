@@ -112,11 +112,14 @@ def check_llm(probe_network: bool = False) -> dict:
     elif provider == "gemini":
         api_key = config.GEMINI_API_KEY
         model = config.GEMINI_MODEL
+    elif provider == "openrouter":
+        api_key = config.OPENROUTER_API_KEY
+        model = config.OPENROUTER_MODEL
     else:
         return _result(
             "llm", False,
             f"Unknown LLM provider configured: '{provider}'",
-            "Set provider to 'openai' or 'gemini' in Settings.",
+            "Set provider to 'openai', 'gemini', or 'openrouter' in Settings.",
         )
 
     if not api_key:
@@ -165,6 +168,10 @@ def _list_available_models(provider: str, api_key: str) -> list[str]:
         from google import genai
         client = genai.Client(api_key=api_key)
         return [getattr(m, "name", "") for m in client.models.list()]
+    if provider == "openrouter":
+        from llm_openrouter import make_openrouter_client
+        client = make_openrouter_client()
+        return [m.id for m in client.models.list().data]
     return []
 
 
