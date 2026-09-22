@@ -157,8 +157,14 @@ output/
 temp/
 tmp/
 
-# Pick-a-Recipe database
-pick-a-recipe.db
+# Local application data and SQLite databases
+/data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # Portainer local secrets
 portainer/stack.env.local
