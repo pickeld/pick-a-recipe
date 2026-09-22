@@ -211,6 +211,12 @@ class Chef:
             self.client = genai.Client(api_key=config.GEMINI_API_KEY)
             self.model = model or config.GEMINI_MODEL
             logger.info(f"[AI Recipe] Gemini model: {self.model}")
+        elif self.provider == "openrouter":
+            from llm_openrouter import make_openrouter_client
+            logger.info("[AI Recipe] Using OpenRouter LLM provider")
+            self.client = make_openrouter_client()
+            self.model = model or config.OPENROUTER_MODEL
+            logger.info(f"[AI Recipe] OpenRouter model: {self.model}")
         else:
             raise ValueError(f"Unknown LLM provider: {self.provider}")
         self.source_url = source_url
@@ -277,10 +283,32 @@ class Chef:
             logger.debug(f"Gemini raw response: {raw_text[:500]}...")
             return extract_json(raw_text)
 
+        def _openrouter(model: str) -> str:
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+            }
+            if json_schema is not None and schema_name:
+                kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": json_schema,
+                    },
+                }
+            resp = self.client.chat.completions.create(**kwargs)
+            return resp.choices[0].message.content or ""
+
         if self.provider == "openai":
             call = _openai
         elif self.provider == "gemini":
             call = _gemini
+        elif self.provider == "openrouter":
+            call = _openrouter
         else:
             raise ValueError(f"Unknown LLM provider: {self.provider}")
 
