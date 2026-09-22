@@ -250,6 +250,8 @@ export const api = {
     }),
 
   // ===== Push notifications =====
+  pushVapidKey: () => request<{ key: string }>('/api/push/vapid-key'),
+
   pushSubscribe: (subscription: PushSubscriptionJSON) =>
     request<{ status: string }>('/api/push/subscribe', {
       method: 'POST',

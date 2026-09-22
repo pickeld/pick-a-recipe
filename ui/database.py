@@ -1510,10 +1510,26 @@ def get_push_subscriptions(username: str) -> List[Dict[str, Any]]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def delete_push_subscription(endpoint: str) -> bool:
+def delete_push_subscription(endpoint: str, username: Optional[str] = None) -> bool:
+    """Remove a push subscription, optionally scoped to its owner.
+
+    Endpoints arrive from the client, so the HTTP path must always pass a
+    username -- without it any signed-in user could unsubscribe someone else's
+    device by quoting their endpoint. The unscoped form is for server-side
+    pruning, where the endpoint was read out of this table to begin with.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('DELETE FROM push_subscriptions WHERE endpoint = ?', (endpoint,))
+        if username is None:
+            cursor.execute(
+                'DELETE FROM push_subscriptions WHERE endpoint = ?',
+                (endpoint,),
+            )
+        else:
+            cursor.execute(
+                'DELETE FROM push_subscriptions WHERE endpoint = ? AND username = ?',
+                (endpoint, username),
+            )
         conn.commit()
         return cursor.rowcount > 0
 

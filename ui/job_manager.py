@@ -52,6 +52,7 @@ from database import (
     expire_due_approvals,
     find_stranded_approvals,
 )
+from push import notify_user
 
 if TYPE_CHECKING:
     from flask_socketio import SocketIO
@@ -480,6 +481,15 @@ class JobManager:
         }
         self._emit_to_rooms('job_complete', payload, job_id)
 
+        recipe_name = recipe_data.get('name') or job.get('video_title') or 'Your recipe'
+        notify_user(
+            job.get('user_id'),
+            title='Recipe saved',
+            body=f'{recipe_name} was added to {output_target}.',
+            url=f'/jobs/{job_id}',
+            tag=f'job-{job_id}',
+        )
+
     def fail_job(self, job_id: str, error_message: str, llm_tokens: int = 0) -> None:
         job = get_job(job_id)
         if not job:
@@ -510,6 +520,14 @@ class JobManager:
 
         payload = {'job_id': job_id, 'error': error_message}
         self._emit_to_rooms('job_failed', payload, job_id)
+
+        notify_user(
+            job.get('user_id'),
+            title='Recipe failed',
+            body=error_message or 'Extraction did not finish.',
+            url=f'/jobs/{job_id}',
+            tag=f'job-{job_id}',
+        )
 
     # ===== slot-free approvals =====
 
@@ -560,6 +578,21 @@ class JobManager:
             from database import delete_pending_upload
             delete_pending_upload(upload_id)
             return None
+
+        # The one notification users actually need: approvals expire, so a
+        # missed one costs them the extraction entirely.
+        recipe_name = recipe_data.get('name') or (job or {}).get('video_title') or 'A recipe'
+        notify_user(
+            user_id,
+            title='Recipe needs your approval',
+            body=f'{recipe_name} is ready to review, and expires in '
+                 f'{timeout_minutes} minutes.',
+            url=f'/jobs/{job_id}',
+            tag=f'job-{job_id}',
+            # Pointless to deliver once the approval window has closed: the
+            # notification would ask for a decision that no longer exists.
+            ttl=timeout_minutes * 60,
+        )
         return upload_id
 
     def confirm_approval(self, upload_id: str,

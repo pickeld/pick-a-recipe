@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import type { AppConfig } from '@/types'
 import { useSession } from '@/hooks/use-session'
 import { AccountCard } from '@/components/settings/account-card'
+import { NotificationsCard } from '@/components/settings/notifications-card'
 import { UsersCard } from '@/components/settings/users-card'
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -203,6 +204,7 @@ export function SettingsPage() {
             Extraction settings are managed by an administrator.
           </p>
         </div>
+        <NotificationsCard />
         {localAuth && session && <AccountCard username={session.user} />}
       </div>
     )
@@ -707,6 +709,8 @@ export function SettingsPage() {
           </Field>
         </CardContent>
       </Card>
+
+      <NotificationsCard />
 
       {localAuth && session && (
         <>
