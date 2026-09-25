@@ -11,6 +11,7 @@ sys.path.insert(0, ROOT)
 from recipe_schema import (  # noqa: E402
     RECIPE_JSON_SCHEMA,
     NotARecipeError,
+    RecipeExtraction,
     ValidationError,
     WrongLanguageError,
     apply_yield_nutrition_guardrails,
@@ -21,6 +22,7 @@ from recipe_schema import (  # noqa: E402
     recipe_dict_from_extraction,
     sanitize_duration,
     sanitize_nutrition_fields,
+    to_gemini_json_schema,
 )
 
 
@@ -144,6 +146,27 @@ class OpenAISchemaTests(unittest.TestCase):
         self.assertIn("is_recipe", required)
         self.assertIn("recipeIngredients", required)
         self.assertNotIn("default", RECIPE_JSON_SCHEMA)
+
+
+class GeminiSchemaTests(unittest.TestCase):
+    def test_strips_additional_properties_recursively(self):
+        # The Gemini Developer API rejects additionalProperties (issue #29), so it
+        # must not survive anywhere in the schema, including nested list items.
+        schema = to_gemini_json_schema(RecipeExtraction)
+
+        def _assert_clean(node):
+            if isinstance(node, dict):
+                self.assertNotIn("additionalProperties", node)
+                for value in node.values():
+                    _assert_clean(value)
+            elif isinstance(node, list):
+                for value in node:
+                    _assert_clean(value)
+
+        _assert_clean(schema)
+        # Field contract is otherwise preserved.
+        self.assertEqual(schema.get("type"), "object")
+        self.assertIn("recipeIngredients", schema.get("required") or [])
 
 
 class NutritionGuardrailTests(unittest.TestCase):

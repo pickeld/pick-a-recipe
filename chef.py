@@ -4,7 +4,7 @@ from typing import Any
 
 from config import config
 from helpers import get_recipe_system_prompt, get_web_recipe_system_prompt, get_yield_nutrition_prompt, setup_logger
-from llm_resilience import call_with_model_fallback
+from llm_session import LlmSession
 from recipe_schema import (
     NUTRITION_JSON_SCHEMA,
     RECIPE_JSON_SCHEMA,
@@ -15,11 +15,9 @@ from recipe_schema import (
     apply_yield_nutrition_guardrails,
     ensure_is_recipe,
     ensure_target_language,
-    extract_json,
     parse_recipe_extraction,
     parse_yield_nutrition,
     recipe_dict_from_extraction,
-    to_gemini_json_schema,
 )
 from nutrition import lookup_recipe_nutrition
 from units import normalize_ingredient_units
@@ -197,22 +195,11 @@ class Chef:
         model: str | None = None,
     ):
         logger.info("[AI Recipe] Initializing Chef...")
-        self.provider = config.LLM_PROVIDER
-        
-        if self.provider == "openai":
-            from openai import OpenAI
-            logger.info("[AI Recipe] Using OpenAI LLM provider")
-            self.client = OpenAI(api_key=config.OPENAI_API_KEY or "not-configured")
-            self.model = model or config.OPENAI_MODEL
-            logger.info(f"[AI Recipe] OpenAI model: {self.model}")
-        elif self.provider == "gemini":
-            from google import genai
-            logger.info("[AI Recipe] Using Gemini LLM provider")
-            self.client = genai.Client(api_key=config.GEMINI_API_KEY)
-            self.model = model or config.GEMINI_MODEL
-            logger.info(f"[AI Recipe] Gemini model: {self.model}")
-        else:
-            raise ValueError(f"Unknown LLM provider: {self.provider}")
+        self._llm = LlmSession(model)
+        self.provider = self._llm.provider
+        self.client = self._llm.client
+        logger.info(f"[AI Recipe] Using {self.provider} LLM provider")
+        logger.info(f"[AI Recipe] {self.provider} model: {self.model}")
         self.source_url = source_url
         self.description = description
         self.transcription = transcription
@@ -221,6 +208,14 @@ class Chef:
             f"[AI Recipe] Chef initialized. Audio {len(transcription)} chars, "
             f"on-screen {len(self.visual_text)} chars"
         )
+
+    @property
+    def model(self) -> str:
+        return self._llm.model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        self._llm.model = value
 
     def _call_llm(
         self,
@@ -231,63 +226,14 @@ class Chef:
         json_schema: dict[str, Any] | None = None,
         schema_model: type | None = None,
     ) -> str:
-        """Call the LLM and return the response text, abstracting provider differences.
-
-        Wrapped with a model-fallback chain so a retired/deprecated model (404)
-        transparently fails over to a known-good model instead of taking the
-        whole extraction down (see PIC-34).
-
-        When ``json_schema`` / ``schema_model`` are provided the provider is
-        asked for structured JSON so we do not have to scrape markdown fences.
-        """
-        def _openai(model: str) -> str:
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "input": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-            }
-            if json_schema is not None and schema_name:
-                kwargs["text"] = {
-                    "format": {
-                        "type": "json_schema",
-                        "name": schema_name,
-                        "strict": True,
-                        "schema": json_schema,
-                    }
-                }
-            resp = self.client.responses.create(**kwargs)
-            return resp.output_text
-
-        def _gemini(model: str) -> str:
-            from google.genai import types
-
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "contents": f"{system_prompt}\n\n{user_content}",
-            }
-            if schema_model is not None:
-                kwargs["config"] = types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=to_gemini_json_schema(schema_model),
-                )
-            resp = self.client.models.generate_content(**kwargs)
-            raw_text = resp.text or ""
-            logger.debug(f"Gemini raw response: {raw_text[:500]}...")
-            return extract_json(raw_text)
-
-        if self.provider == "openai":
-            call = _openai
-        elif self.provider == "gemini":
-            call = _gemini
-        else:
-            raise ValueError(f"Unknown LLM provider: {self.provider}")
-
-        result, used_model = call_with_model_fallback(self.provider, self.model, call)
-        # Stick with the working model for the rest of this Chef's lifetime.
-        self.model = used_model
-        return result
+        """Call the LLM and return the response text, abstracting provider differences."""
+        return self._llm.call(
+            system_prompt,
+            user_content,
+            schema_name=schema_name,
+            json_schema=json_schema,
+            schema_model=schema_model,
+        )
 
     def _postprocess_recipe(self, data: dict, source_url: str | None) -> dict:
         return postprocess_recipe(data, source_url or self.source_url)
