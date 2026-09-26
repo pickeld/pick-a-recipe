@@ -3,7 +3,7 @@
 Split in two. The hashing tests touch only `passwords`, so they run in-process.
 Everything that needs the Flask app runs in a forked interpreter via
 app_harness: importing `app` fixes AUTH_MODE for the whole process, and the
-SSO suites in this same run need it left on `authentik`.
+SSO suites in this same run need it left on `oidc`.
 
 One fork per class rather than per test, so the cost of importing the app is
 paid a handful of times instead of thirty.

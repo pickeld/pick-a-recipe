@@ -232,7 +232,7 @@ def upsert_oidc_user(
     avatar_url: Optional[str] = None,
     is_admin: bool = False,
 ) -> Dict[str, Any]:
-    """Create or refresh the local cache record for an OIDC (Authentik) user.
+    """Create or refresh the local cache record for a single-sign-on user.
 
     Users are identified by their stable OIDC subject (`sub`). On first login a
     unique username is derived from preferred_username/email; if taken by a
@@ -274,7 +274,7 @@ def upsert_oidc_user(
 def ensure_local_user(username: str, *, is_admin: bool = True) -> Dict[str, Any]:
     """Create or return a local account, without setting a password.
 
-    Carries no OIDC subject, so enabling Authentik later cannot collide with it:
+    Carries no OIDC subject, so enabling single sign-on later cannot collide with it:
     `upsert_oidc_user` only ever matches rows by `oidc_sub`. An account left
     without a password cannot be signed into; `set_user_password` completes it.
     """

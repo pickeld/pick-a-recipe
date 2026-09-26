@@ -727,9 +727,9 @@ export function SettingsPage() {
               Accounts
             </CardTitle>
             <CardDescription>
-              Sign-in, accounts and admin rights come from Authentik. Add or
-              remove people there, and use its groups to decide who administers
-              this instance.
+              Sign-in, accounts and admin rights come from your identity
+              provider. Add or remove people there, and use its groups to
+              decide who administers this instance.
             </CardDescription>
           </CardHeader>
         </Card>

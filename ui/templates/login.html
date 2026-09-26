@@ -29,14 +29,15 @@
         </form>
         {% elif sso_enabled %}
         <a href="{{ url_for('auth_login') }}" class="btn btn-primary btn-block" style="display:flex; align-items:center; justify-content:center; gap:0.5rem;">
-            <i class="fas fa-fingerprint"></i> Sign in with Authentik
+            <i class="fas fa-fingerprint"></i> Sign in with {{ oidc_provider_name }}
         </a>
         {% else %}
         <p class="form-hint" style="text-align:center;">
             <i class="fas fa-triangle-exclamation"></i>
             Single sign-on is not configured on this server. Set
-            <code>AUTHENTIK_CLIENT_ID</code> and <code>AUTHENTIK_CLIENT_SECRET</code>,
-            or drop <code>AUTH_MODE</code> to use local accounts instead.
+            <code>OIDC_ISSUER_URL</code>, <code>OIDC_CLIENT_ID</code> and
+            <code>OIDC_CLIENT_SECRET</code>, or drop <code>AUTH_MODE</code> to
+            use local accounts instead.
         </p>
         {% endif %}
 

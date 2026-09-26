@@ -30,7 +30,8 @@ class AuthCallbackFailure extends AuthCallback {
   String get message => switch (code) {
         'not_authorized' =>
           'Your account is not authorized to use Pick-a-Recipe. Ask an '
-              'administrator to add you to the right Authentik group.',
+              'administrator to add you to the right group in your identity '
+              'provider.',
         'server_misconfigured' =>
           'Mobile sign-in is not configured on the server.',
         'token_exchange_failed' =>

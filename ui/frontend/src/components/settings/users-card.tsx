@@ -311,7 +311,7 @@ function UserRow({
 }
 
 /**
- * Account management. Admin-only, and local-mode only: under Authentik the
+ * Account management. Admin-only, and local-mode only: under OIDC the
  * identity provider owns accounts and group membership owns admin rights.
  */
 export function UsersCard({ currentUsername }: { currentUsername: string }) {
