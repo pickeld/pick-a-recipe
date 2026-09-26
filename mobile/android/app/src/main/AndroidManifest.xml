@@ -51,7 +51,7 @@
             <data android:mimeType="text/plain"/>
         </intent>
         <!-- Android 11+ package visibility: without this, url_launcher cannot
-             see a browser to hand the Authentik sign-in URL to. -->
+             see a browser to hand the single sign-on URL to. -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="https"/>

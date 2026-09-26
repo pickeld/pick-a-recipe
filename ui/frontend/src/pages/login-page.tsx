@@ -128,6 +128,7 @@ export function LoginPage() {
   const { showInstall, install } = useInstallPrompt()
 
   const ssoEnabled = data?.sso_enabled ?? true
+  const ssoProviderName = data?.sso_provider_name || 'SSO'
   const localAuth = data?.local_auth_enabled ?? false
 
   // A fresh instance has no account yet, so there is nothing to sign in to.
@@ -160,7 +161,7 @@ export function LoginPage() {
               <PasswordForm />
             ) : ssoEnabled ? (
               <Button asChild size="lg" className="w-full">
-                <a href="/auth/login">Sign in with Authentik</a>
+                <a href="/auth/login">Sign in with {ssoProviderName}</a>
               </Button>
             ) : (
               <div
@@ -171,11 +172,15 @@ export function LoginPage() {
                 <span>
                   Single sign-on is not configured on this server. Set{' '}
                   <code className="rounded bg-destructive/15 px-1 font-mono text-xs">
-                    AUTHENTIK_CLIENT_ID
+                    OIDC_ISSUER_URL
+                  </code>
+                  ,{' '}
+                  <code className="rounded bg-destructive/15 px-1 font-mono text-xs">
+                    OIDC_CLIENT_ID
                   </code>{' '}
                   and{' '}
                   <code className="rounded bg-destructive/15 px-1 font-mono text-xs">
-                    AUTHENTIK_CLIENT_SECRET
+                    OIDC_CLIENT_SECRET
                   </code>
                   , or drop{' '}
                   <code className="rounded bg-destructive/15 px-1 font-mono text-xs">

@@ -270,9 +270,10 @@ export const api = {
   // ===== Auth =====
   authStatus: () =>
     request<{
-      auth_mode: 'local' | 'authentik'
+      auth_mode: 'local' | 'oidc'
       local_auth_enabled: boolean
       sso_enabled: boolean
+      sso_provider_name: string
       setup_required: boolean
       mobile_auth_enabled: boolean
       auth_disabled: boolean

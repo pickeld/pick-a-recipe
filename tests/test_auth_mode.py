@@ -1,4 +1,4 @@
-"""Tests for AUTH_MODE — local password accounts versus Authentik SSO.
+"""Tests for AUTH_MODE — local password accounts versus OIDC single sign-on.
 
 Each scenario runs in its own subprocess: AUTH_MODE is read once when `app` is
 imported, so two modes cannot coexist in a single interpreter. Isolation also
@@ -127,8 +127,8 @@ class TestAuthModeNoneIsMigrated(unittest.TestCase):
         self.assertTrue(self.res['adopted_has_no_oidc_sub'])
 
 
-class TestAuthentikMode(unittest.TestCase):
-    """AUTH_MODE=authentik keeps the SSO-only behaviour."""
+class TestOidcMode(unittest.TestCase):
+    """AUTH_MODE=oidc keeps the SSO-only behaviour."""
 
     @classmethod
     def setUpClass(cls):
@@ -157,13 +157,19 @@ class TestAuthentikMode(unittest.TestCase):
                 json_login_status=json_login.status_code,
                 still_unauthenticated=after.status_code,
             )
-        """, AUTH_MODE='authentik',
-             AUTHENTIK_CLIENT_ID='cid', AUTHENTIK_CLIENT_SECRET='secret')
+        """, AUTH_MODE='oidc', OIDC_ISSUER_URL='https://idp.example.test',
+             OIDC_CLIENT_ID='cid', OIDC_CLIENT_SECRET='secret',
+             OIDC_PROVIDER_NAME='Keycloak')
         cls.res = _result(proc)
 
     def test_mode_reported(self):
-        self.assertEqual(self.res['auth_mode'], 'authentik')
+        self.assertEqual(self.res['auth_mode'], 'oidc')
         self.assertFalse(self.res['local_auth'])
+
+    def test_provider_name_is_reported_for_the_sign_in_button(self):
+        """So clients say "Sign in with Keycloak", not the name of whichever
+        provider this app happened to be written against."""
+        self.assertEqual(self.res['auth_status']['sso_provider_name'], 'Keycloak')
 
     def test_no_setup_needed(self):
         """Accounts arrive from the provider, so there is nothing to bootstrap."""
@@ -183,6 +189,102 @@ class TestAuthentikMode(unittest.TestCase):
         self.assertEqual(self.res['json_login_status'], 400)
         # Above all: no session was established either way.
         self.assertEqual(self.res['still_unauthenticated'], 401)
+
+
+class TestLegacyAuthentikNamesStillWork(unittest.TestCase):
+    """Issue #37: the rename must not break a working Authentik deployment.
+
+    An operator who set AUTH_MODE=authentik and the AUTHENTIK_* variables gets
+    the same behaviour under the new names, without editing anything.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        proc = _run("""
+            import app as app_module
+            from app import AUTH_MODE, LOCAL_AUTH, OIDC_ISSUER_URL, OIDC_USER_GROUP
+            app_module.app.config['TESTING'] = True
+            status = app_module.app.test_client().get('/api/auth/status')
+            emit(
+                auth_mode=AUTH_MODE,
+                local_auth=LOCAL_AUTH,
+                issuer=OIDC_ISSUER_URL,
+                user_group=OIDC_USER_GROUP,
+                auth_status=status.get_json(),
+            )
+        """, AUTH_MODE='authentik',
+             AUTHENTIK_ISSUER_URL='https://legacy.example.test',
+             AUTHENTIK_CLIENT_ID='cid', AUTHENTIK_CLIENT_SECRET='secret',
+             AUTHENTIK_USER_GROUP='old-group')
+        cls.res = _result(proc)
+
+    def test_legacy_mode_maps_onto_oidc(self):
+        self.assertEqual(self.res['auth_mode'], 'oidc')
+        self.assertFalse(self.res['local_auth'])
+
+    def test_legacy_variables_still_configure_the_client(self):
+        self.assertEqual(self.res['issuer'], 'https://legacy.example.test')
+        self.assertEqual(self.res['user_group'], 'old-group')
+        self.assertTrue(self.res['auth_status']['sso_enabled'])
+
+
+class TestGroupGate(unittest.TestCase):
+    """Who _resolve_oidc_identity lets in, across the claim shapes providers use."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.res = _result(_run("""
+            from app import _resolve_oidc_identity, _claim_groups
+            emit(
+                list_claim=_resolve_oidc_identity(
+                    {'sub': 'a', 'preferred_username': 'ada',
+                     'groups': ['pick-a-recipe-users']})[1:],
+                admin_claim=_resolve_oidc_identity(
+                    {'sub': 'a', 'preferred_username': 'ada',
+                     'groups': ['admins']})[1:],
+                outsider=_resolve_oidc_identity(
+                    {'sub': 'a', 'preferred_username': 'ada',
+                     'groups': ['someone-else']})[1:],
+                no_groups_at_all=_resolve_oidc_identity(
+                    {'sub': 'a', 'preferred_username': 'ada'})[1:],
+                space_separated=sorted(_claim_groups({'groups': 'one two'})),
+                keycloak_paths=sorted(_claim_groups({'groups': ['/admins']})),
+                objects=sorted(_claim_groups({'groups': [{'name': 'devs'}]})),
+            )
+        """, AUTH_MODE='oidc', OIDC_ISSUER_URL='https://idp.example.test',
+             OIDC_CLIENT_ID='cid', OIDC_CLIENT_SECRET='secret'))
+
+    def test_user_group_grants_access(self):
+        self.assertEqual(self.res['list_claim'], ['ada', False])
+
+    def test_admin_group_grants_admin(self):
+        self.assertEqual(self.res['admin_claim'], ['ada', True])
+
+    def test_other_groups_are_refused(self):
+        self.assertEqual(self.res['outsider'], [None, False])
+
+    def test_a_provider_that_sends_no_groups_is_refused_by_default(self):
+        self.assertEqual(self.res['no_groups_at_all'], [None, False])
+
+    def test_claim_shapes_providers_actually_send(self):
+        self.assertEqual(self.res['space_separated'], ['one', 'two'])
+        # Keycloak's path-style groups arrive with a leading slash.
+        self.assertEqual(self.res['keycloak_paths'], ['admins'])
+        self.assertEqual(self.res['objects'], ['devs'])
+
+
+class TestEmptyUserGroupAdmitsEveryone(unittest.TestCase):
+    """For providers that cannot publish groups at all, per issue #37."""
+
+    def test_no_group_configured_means_any_authenticated_user(self):
+        res = _result(_run("""
+            from app import _resolve_oidc_identity
+            emit(identity=_resolve_oidc_identity(
+                {'sub': 'a', 'preferred_username': 'ada'})[1:])
+        """, AUTH_MODE='oidc', OIDC_ISSUER_URL='https://idp.example.test',
+             OIDC_CLIENT_ID='cid', OIDC_CLIENT_SECRET='secret',
+             OIDC_USER_GROUP=''))
+        self.assertEqual(res['identity'], ['ada', False])
 
 
 class TestInvalidAuthMode(unittest.TestCase):

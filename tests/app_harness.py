@@ -19,10 +19,16 @@ import textwrap
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Cleared so a developer's real SSO configuration cannot change what a test
-# asserts, and so each run starts from the documented defaults.
+# asserts, and so each run starts from the documented defaults. Both spellings
+# go: the AUTHENTIK_* names are still honoured as aliases, so leaving one set
+# would configure SSO in a test that meant to leave it off.
 _STRIPPED = (
     'AUTH_MODE', 'AUTH_LOCAL_USERNAME',
-    'AUTHENTIK_CLIENT_ID', 'AUTHENTIK_CLIENT_SECRET',
+    'OIDC_ISSUER_URL', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET',
+    'OIDC_USER_GROUP', 'OIDC_ADMIN_GROUP', 'OIDC_GROUPS_CLAIM',
+    'OIDC_SCOPES', 'OIDC_PROVIDER_NAME', 'OIDC_REDIRECT_URI',
+    'AUTHENTIK_ISSUER_URL', 'AUTHENTIK_CLIENT_ID', 'AUTHENTIK_CLIENT_SECRET',
+    'AUTHENTIK_USER_GROUP', 'AUTHENTIK_ADMIN_GROUP', 'AUTHENTIK_REDIRECT_URI',
 )
 
 

@@ -61,8 +61,8 @@ Open `http://localhost:5006` and pick a username and password. That first visit
 is the only time the setup page is available; once an account exists it closes
 for good.
 
-No identity provider is needed. If you would rather sign in through Authentik,
-see [Authentication](#authentication).
+No identity provider is needed. If you would rather sign in through single
+sign-on, see [Authentication](#authentication).
 
 **Option 2: Using Docker Compose**
 
@@ -140,7 +140,7 @@ Two modes, selected with `AUTH_MODE`:
 | `AUTH_MODE` | Behaviour |
 |-------------|-----------|
 | `local` (default) | Username and password accounts stored by this app. No identity provider needed. |
-| `authentik` | Authentik single sign-on (OIDC). Accounts and groups come from Authentik. |
+| `oidc` | Single sign-on through any OpenID Connect provider — Authentik, Authelia, Keycloak, Pocket ID, Zitadel, Okta … Accounts and groups come from that provider. |
 
 **`local` — accounts stored by this app (default)**
 
@@ -193,9 +193,9 @@ cookie expires, so revoking access is immediate.
 Changing your own password requires your current one, so a borrowed session
 cannot be used to lock you out of your own account.
 
-In `authentik` mode this section does not apply: accounts, passwords and group
-membership live in Authentik, and the settings page says so instead of offering
-controls that could not work.
+In `oidc` mode this section does not apply: accounts, passwords and group
+membership live in the identity provider, and the settings page says so instead
+of offering controls that could not work.
 
 **Upgrading from `AUTH_MODE=none`**
 
@@ -207,33 +207,54 @@ than creating a second one — accept it, pick a password, and your history
 carries over. Typing a different name starts with an empty history. Update your
 configuration to `AUTH_MODE=local`, or drop the variable entirely.
 
-**`authentik` — single sign-on**
+**`oidc` — single sign-on**
 
-Requires an [Authentik](https://goauthentik.io/) instance. Create an OAuth2/OIDC
-provider for the app and set:
+Works with any OpenID Connect provider: [Authentik](https://goauthentik.io/),
+[Authelia](https://www.authelia.com/), [Keycloak](https://www.keycloak.org/),
+[Pocket ID](https://pocket-id.org/), Zitadel, Okta and the rest. Nothing here is
+specific to one of them — the app only uses OIDC discovery, the authorization
+code flow and standard claims.
+
+Register a confidential OAuth2/OIDC client for the app with the redirect URI
+`https://your-host/auth/callback`, then set:
 
 ```bash
-AUTH_MODE=authentik
-AUTHENTIK_ISSUER_URL=https://auth.example.com/application/o/pick-a-recipe
-AUTHENTIK_CLIENT_ID=...
-AUTHENTIK_CLIENT_SECRET=...
+AUTH_MODE=oidc
+OIDC_ISSUER_URL=https://auth.example.com/application/o/pick-a-recipe
+OIDC_CLIENT_ID=...
+OIDC_CLIENT_SECRET=...
+OIDC_PROVIDER_NAME=Authentik   # optional, names the sign-in button
 ```
 
-Access is gated on group membership: users need `AUTHENTIK_USER_GROUP`
-(default `pick-a-recipe-users`), and admins additionally need
-`AUTHENTIK_ADMIN_GROUP` (default `admins`). Add the *authentik read groups*
-scope mapping to the provider so the `groups` claim is present in tokens.
+`OIDC_ISSUER_URL` is the URL whose `/.well-known/openid-configuration` describes
+the provider. Everything else is discovered from there.
 
-Behind a reverse proxy, set `PUBLIC_URL` (or `AUTHENTIK_REDIRECT_URI`) so the
-OIDC callback URL matches what you registered in Authentik, and set
+Access is gated on group membership: users need `OIDC_USER_GROUP` (default
+`pick-a-recipe-users`), and admins additionally need `OIDC_ADMIN_GROUP`
+(default `admins`). **Set `OIDC_USER_GROUP=` (empty) to let every authenticated
+user in**, which is what you want from a provider that does not publish groups.
+
+Groups are read from the claim named by `OIDC_GROUPS_CLAIM` (default `groups`),
+accepting a list of names, a space- or comma-separated string, or a list of
+objects with `name`/`path`. Keycloak's leading `/` on path-style groups is
+ignored, so configure the plain name. Publishing that claim is provider-specific:
+Authentik needs the *authentik read groups* scope mapping on the provider,
+Keycloak a group membership mapper, Authelia the `groups` scope.
+
+Behind a reverse proxy, set `PUBLIC_URL` (or `OIDC_REDIRECT_URI`) so the OIDC
+callback URL matches what you registered with the provider, and set
 `SESSION_COOKIE_SECURE=true` when serving over HTTPS.
 
 Password sign-in is refused outright in this mode, so an account that happens to
 carry a password cannot be used to go around single sign-on.
 
-With `AUTH_MODE=authentik` set but no client credentials configured, nobody can
-sign in and the login page says so. It fails closed on purpose; drop `AUTH_MODE`
-to fall back to local accounts.
+With `AUTH_MODE=oidc` set but no issuer or client credentials configured, nobody
+can sign in and the login page says so. It fails closed on purpose; drop
+`AUTH_MODE` to fall back to local accounts.
+
+*Upgrading:* `AUTH_MODE=authentik` and the `AUTHENTIK_*` variables still work —
+they map onto `oidc` and the matching `OIDC_*` names, with a note in the log.
+Nothing needs changing to keep an existing Authentik setup running.
 
 **Android app sign-in**
 
@@ -251,11 +272,11 @@ The app asks for your server's address on first launch — nothing is compiled i
 since everyone runs their own instance — then reads `/api/auth/status` and offers
 whichever sign-in that instance has. Under `local` it posts the username and
 password to `/api/mobile/auth/login`, which applies the same throttle ladder as
-the web form, so neither is a way around the other. Under `authentik` a password
+the web form, so neither is a way around the other. Under `oidc` a password
 is refused there: group membership governs access, not any password an account
 happens to carry.
 
-For Authentik the app cannot hold the OIDC client secret, so it opens the system
+For single sign-on the app cannot hold the OIDC client secret, so it opens the system
 browser, the server completes the code exchange, and the resulting token pair is
 handed back over a custom-scheme deep link (`par://auth/callback` by default,
 configurable with `MOBILE_DEEP_LINK_SCHEMES`). Tokens travel in the URL fragment,
@@ -263,7 +284,7 @@ which browsers do not send to servers or leak via `Referer`.
 
 Access tokens last 15 minutes and refresh tokens 30 days; `POST
 /api/mobile/auth/refresh` re-reads the account on every refresh, so removing
-someone from the Authentik group — or deleting or demoting a local account —
+someone from the authorized group — or deleting or demoting a local account —
 takes effect within the access-token lifetime rather than lasting for the life of
 the refresh token.
 
@@ -392,13 +413,18 @@ docker pull pickeld/pick-a-recipe:v1.0.0
 | `FLASK_SECRET_KEY` | Secret key for session cookies | Auto-generated |
 | `FLASK_DEBUG` | Enable debug mode | `false` |
 | `MAX_CONCURRENT_JOBS` | Parallel extraction workers (1–16) | `3` (or Settings value) |
-| `AUTH_MODE` | `local` for accounts stored by this app, or `authentik` for SSO ([details](#authentication)) | `local` |
+| `AUTH_MODE` | `local` for accounts stored by this app, or `oidc` for SSO ([details](#authentication)) | `local` |
 | `AUTH_LOCAL_USERNAME` | Prefills the username field on the setup page | `admin` |
-| `AUTHENTIK_ISSUER_URL` | Authentik OIDC issuer URL | `https://auth.pickel.me/application/o/pick-a-recipe` |
-| `AUTHENTIK_CLIENT_ID` | Authentik OAuth2 client ID (required when `AUTH_MODE=authentik`) | — |
-| `AUTHENTIK_CLIENT_SECRET` | Authentik OAuth2 client secret | — |
-| `AUTHENTIK_USER_GROUP` | Authentik group required for access | `pick-a-recipe-users` |
-| `AUTHENTIK_ADMIN_GROUP` | Authentik group granting admin rights | `admins` |
+| `OIDC_ISSUER_URL` | OIDC issuer URL, the one serving `/.well-known/openid-configuration` (required when `AUTH_MODE=oidc`) | — |
+| `OIDC_CLIENT_ID` | OAuth2 client ID (required when `AUTH_MODE=oidc`) | — |
+| `OIDC_CLIENT_SECRET` | OAuth2 client secret (required when `AUTH_MODE=oidc`) | — |
+| `OIDC_USER_GROUP` | Group required for access; empty admits any authenticated user | `pick-a-recipe-users` |
+| `OIDC_ADMIN_GROUP` | Group granting admin rights | `admins` |
+| `OIDC_GROUPS_CLAIM` | Claim the group names are read from | `groups` |
+| `OIDC_SCOPES` | Scopes requested at the provider | `openid email profile groups` |
+| `OIDC_PROVIDER_NAME` | Name shown on the sign-in button | `SSO` |
+| `OIDC_REDIRECT_URI` | Callback URL, when `PUBLIC_URL` is not enough | derived |
+| `AUTHENTIK_*` | Deprecated aliases for the `OIDC_*` variables above | — |
 | `JWT_SECRET_KEY` | Signing key for Android app tokens; unset disables mobile auth | — |
 | `MOBILE_DEEP_LINK_SCHEMES` | Comma-separated URL schemes the app may receive tokens on | `par` |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Web Push signing pair ([details](#notifications)) | Generated on first use |

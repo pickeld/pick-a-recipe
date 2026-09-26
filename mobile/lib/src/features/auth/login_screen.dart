@@ -243,7 +243,8 @@ class _SignInStep extends ConsumerWidget {
     if (status.ssoEnabled) {
       return <Widget>[
         _Blurb(
-          text: 'Sign in with your Authentik account to reach your recipes.',
+          text: 'Sign in with your ${status.ssoProviderName} account to reach '
+              'your recipes.',
         ),
         const SizedBox(height: 24),
         if (auth.errorMessage != null) ...<Widget>[
@@ -253,7 +254,7 @@ class _SignInStep extends ConsumerWidget {
         _BusyButton(
           isBusy: auth.isBusy,
           busyLabel: 'Waiting for browser\u2026',
-          label: 'Sign in with Authentik',
+          label: 'Sign in with ${status.ssoProviderName}',
           icon: Icons.login,
           onPressed: () =>
               ref.read(authControllerProvider.notifier).signIn(),
@@ -268,13 +269,13 @@ class _SignInStep extends ConsumerWidget {
       ];
     }
 
-    // AUTH_MODE=authentik with no client credentials configured: the server
-    // fails closed, and there is nothing the app can offer.
+    // AUTH_MODE=oidc with no client credentials configured: the server fails
+    // closed, and there is nothing the app can offer.
     return <Widget>[
       const _NoticeCard(
         icon: Icons.report_gmailerrorred_outlined,
         message: 'This server has no way to sign in configured. Whoever runs '
-            'it needs to finish setting up Authentik, or switch to local '
+            'it needs to finish setting up single sign-on, or switch to local '
             'accounts.',
       ),
     ];
