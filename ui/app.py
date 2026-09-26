@@ -257,27 +257,34 @@ LOCAL_USERNAME = (
 _LEGACY_OIDC_ENV: list[str] = []
 
 
-def _oidc_env(name: str, default: str = '') -> str:
+def _oidc_env(name: str, default: str = '', *, empty_is_unset: bool = True) -> str:
     """Read OIDC_<name>, falling back to the pre-rename AUTHENTIK_<name>.
 
-    Absence, not emptiness, triggers the fallback: OIDC_USER_GROUP='' is a
-    deliberate "no group check", not a request for the old value.
+    ``empty_is_unset`` decides what an empty OIDC_* value means. For a client
+    id or an issuer it means nothing at all, and Compose hands every declared
+    variable to the container whether or not the operator set it - so an
+    upgraded stack passing OIDC_CLIENT_ID="" alongside a real
+    AUTHENTIK_CLIENT_ID has to keep working, or single sign-on fails closed on
+    the deploy. For a group name, empty is the deliberate "admit everyone", so
+    there absence alone falls back.
     """
     value = os.environ.get(f'OIDC_{name}')
-    if value is not None:
+    if value is not None and (value.strip() or not empty_is_unset):
         return value
     legacy = os.environ.get(f'AUTHENTIK_{name}')
-    if legacy is not None:
+    if legacy is not None and (legacy.strip() or not empty_is_unset):
         _LEGACY_OIDC_ENV.append(f'AUTHENTIK_{name}')
         return legacy
-    return default
+    return value if value is not None else default
 
 
 OIDC_ISSUER_URL = _oidc_env('ISSUER_URL').strip().rstrip('/')
 OIDC_CLIENT_ID = _oidc_env('CLIENT_ID').strip()
 OIDC_CLIENT_SECRET = _oidc_env('CLIENT_SECRET').strip()
-OIDC_USER_GROUP = _oidc_env('USER_GROUP', 'pick-a-recipe-users').strip()
-OIDC_ADMIN_GROUP = _oidc_env('ADMIN_GROUP', 'admins').strip()
+OIDC_USER_GROUP = _oidc_env(
+    'USER_GROUP', 'pick-a-recipe-users', empty_is_unset=False).strip()
+OIDC_ADMIN_GROUP = _oidc_env(
+    'ADMIN_GROUP', 'admins', empty_is_unset=False).strip()
 OIDC_GROUPS_CLAIM = (os.environ.get('OIDC_GROUPS_CLAIM') or 'groups').strip()
 OIDC_SCOPES = (os.environ.get('OIDC_SCOPES') or 'openid email profile groups').strip()
 # Shown on the sign-in button, so an operator can say "Sign in with Keycloak"

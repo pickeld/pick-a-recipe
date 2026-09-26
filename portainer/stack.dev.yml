@@ -27,6 +27,12 @@ services:
       OIDC_USER_GROUP: ${OIDC_USER_GROUP:-pick-a-recipe-users}
       OIDC_ADMIN_GROUP: ${OIDC_ADMIN_GROUP:-admins}
       OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-Authentik}
+      # Pre-rename names, still read by the app as aliases. Passed through so a
+      # stack environment that has not been renamed yet keeps signing people in
+      # across the upgrade; drop these once the OIDC_* ones are set.
+      AUTHENTIK_ISSUER_URL: ${AUTHENTIK_ISSUER_URL:-}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       PUBLIC_URL: ${PUBLIC_URL:-}

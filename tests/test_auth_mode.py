@@ -228,6 +228,54 @@ class TestLegacyAuthentikNamesStillWork(unittest.TestCase):
         self.assertTrue(self.res['auth_status']['sso_enabled'])
 
 
+class TestComposePassesEmptyVariables(unittest.TestCase):
+    """The upgrade path through Docker Compose, which is where this bites.
+
+    Compose hands every variable declared in the stack file to the container,
+    set or not. An upgraded stack therefore passes OIDC_CLIENT_ID="" next to a
+    real AUTHENTIK_CLIENT_ID, and treating that empty string as "configured"
+    would fail single sign-on closed on the deploy.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        proc = _run("""
+            from app import (
+                AUTH_MODE, OIDC_CLIENT_ID, OIDC_ISSUER_URL, OIDC_USER_GROUP,
+                oidc_client,
+            )
+            emit(
+                auth_mode=AUTH_MODE,
+                client_id=OIDC_CLIENT_ID,
+                issuer=OIDC_ISSUER_URL,
+                user_group=OIDC_USER_GROUP,
+                sso_enabled=oidc_client is not None,
+            )
+        """, AUTH_MODE='oidc',
+             OIDC_ISSUER_URL='', OIDC_CLIENT_ID='', OIDC_CLIENT_SECRET='',
+             AUTHENTIK_ISSUER_URL='https://legacy.example.test',
+             AUTHENTIK_CLIENT_ID='cid', AUTHENTIK_CLIENT_SECRET='secret')
+        cls.res = _result(proc)
+
+    def test_an_empty_new_variable_yields_to_a_set_old_one(self):
+        self.assertEqual(self.res['client_id'], 'cid')
+        self.assertEqual(self.res['issuer'], 'https://legacy.example.test')
+        self.assertTrue(self.res['sso_enabled'])
+
+    def test_an_empty_group_still_means_admit_everyone(self):
+        """Empty is meaningful for a group, unlike for a client id."""
+        res = _result(_run("""
+            from app import OIDC_USER_GROUP, _resolve_oidc_identity
+            emit(user_group=OIDC_USER_GROUP,
+                 identity=_resolve_oidc_identity(
+                     {'sub': 'a', 'preferred_username': 'ada'})[1:])
+        """, AUTH_MODE='oidc', OIDC_ISSUER_URL='https://idp.example.test',
+             OIDC_CLIENT_ID='cid', OIDC_CLIENT_SECRET='secret',
+             OIDC_USER_GROUP='', AUTHENTIK_USER_GROUP='old-group'))
+        self.assertEqual(res['user_group'], '')
+        self.assertEqual(res['identity'], ['ada', False])
+
+
 class TestGroupGate(unittest.TestCase):
     """Who _resolve_oidc_identity lets in, across the claim shapes providers use."""
 
