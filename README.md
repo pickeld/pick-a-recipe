@@ -28,7 +28,7 @@ Pick-a-Recipe is a Python application that:
 - 🎙️ Audio transcription with language detection
 - 👁️ Visual text extraction from video frames
 - 🤖 AI-powered recipe generation with structured ingredients
-- 🍽️ Automatic nutrition and serving size estimation
+- 🍽️ Automatic nutrition and serving size estimation, backed by [Open Food Facts](https://world.openfoodfacts.org/)
 - 🖼️ Dish image extraction with manual selection option
 - 🌐 Web UI with real-time progress updates
 - 🔐 User authentication and settings management
@@ -290,6 +290,28 @@ sessions; cookies take precedence when both are present.
 | **Mealie Host** | URL of your Mealie instance |
 | **Mealie API Key** | API token from Mealie |
 | **Confirm Before Upload** | Show recipe preview before uploading |
+| **Nutrition lookup** | Look ingredients the built-in table does not know up in Open Food Facts (on by default; no API key needed) |
+
+#### Nutrition
+
+Per-serving nutrition is worked out from the ingredient list, not guessed by the
+model. Each ingredient is converted to grams and costed against a built-in table
+of per-100 g figures covering the ~180 foods that come up most often, in English
+and Hebrew.
+
+Anything the table does not recognise is looked up in
+[Open Food Facts](https://world.openfoodfacts.org/) — an open, collaborative food
+database with worldwide coverage, which needs no API key or account. Because its
+entries are individual branded products, the median of several popular matches is
+used rather than the first hit. Results are cached, outbound searches are capped
+at ten a minute to stay within what Open Food Facts asks of clients, and a failed
+lookup is simply skipped: nutrition is an extra, and never fails an extraction.
+
+Turn **Nutrition lookup** off in Settings for a fully offline instance. The
+built-in table keeps working either way.
+
+Open Food Facts data is published under the
+[Open Database License](https://opendatacommons.org/licenses/odbl/1-0/).
 
 ## Usage
 
