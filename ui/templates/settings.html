@@ -10,70 +10,75 @@
     </div>
     
     <form method="POST" action="{{ url_for('settings') }}" class="settings-form">
-        <!-- AI Provider -->
+        <!-- AI Providers -->
         <div class="settings-section">
-            <h2><i class="fas fa-brain"></i> AI Provider</h2>
-            <p class="section-description">Used to turn raw video/page content into a structured recipe.</p>
+            <h2><i class="fas fa-server"></i> AI Providers</h2>
+            <p class="section-description">The models this instance can reach. A provider is an API dialect, a key, a model name and — for OpenAI-compatible endpoints — a base URL, which between them cover OpenAI, Gemini, Claude, OpenRouter, Groq, a local Ollama and anything else speaking one of those dialects.</p>
+
+            <div id="provider-rows">
+                {% for provider in ai_providers %}
+                <div class="provider-row" data-provider-row>
+                    <input type="hidden" name="provider_id[]" value="{{ provider.id }}">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Name</label>
+                            <input type="text" name="provider_name[]" value="{{ provider.name }}"
+                                   placeholder="OpenAI" autocomplete="off" data-provider-name>
+                        </div>
+                        <div class="form-group">
+                            <label>API type</label>
+                            <select name="provider_api_type[]" class="form-select" data-provider-type>
+                                {% for key, spec in api_types.items() %}
+                                <option value="{{ key }}" {% if provider.api_type == key %}selected{% endif %}>{{ spec.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>API key</label>
+                            <input type="password" name="provider_api_key[]" value="{{ provider.api_key }}"
+                                   placeholder="sk-..." autocomplete="off" autocapitalize="none" spellcheck="false">
+                        </div>
+                        <div class="form-group">
+                            <label>Model</label>
+                            <input type="text" name="provider_model[]" value="{{ provider.model }}"
+                                   placeholder="gpt-5-mini" autocomplete="off" autocapitalize="none"
+                                   spellcheck="false" list="model-suggestions-{{ loop.index0 }}" data-provider-model>
+                            <datalist id="model-suggestions-{{ loop.index0 }}"></datalist>
+                            <small class="form-hint">Any model name works. Suggestions come from models.dev.</small>
+                        </div>
+                    </div>
+                    <div class="form-group" data-base-url-group>
+                        <label>Base URL</label>
+                        <input type="url" name="provider_base_url[]" value="{{ provider.base_url }}"
+                               placeholder="https://openrouter.ai/api/v1" autocomplete="off"
+                               autocapitalize="none" spellcheck="false" data-provider-base-url>
+                        <small class="form-hint">Required for OpenAI-compatible endpoints. Leave blank for OpenAI, Gemini and Claude.</small>
+                    </div>
+                    <button type="button" class="btn btn-secondary" data-remove-provider>
+                        <i class="fas fa-trash"></i> Remove
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+
+            <button type="button" class="btn btn-secondary" id="add-provider-btn">
+                <i class="fas fa-plus"></i> Add provider
+            </button>
+        </div>
+
+        <!-- AI Extraction -->
+        <div class="settings-section">
+            <h2><i class="fas fa-brain"></i> AI Extraction</h2>
+            <p class="section-description">Which of the providers above turns raw video and page content into a structured recipe. It also reads on-screen text and picks the dish photo, so it needs a model that can see images.</p>
 
             <div class="form-group">
-                <label for="llm_provider">Provider</label>
-                <select id="llm_provider" name="llm_provider" class="form-select">
-                    <option value="openai" {% if config.llm_provider == 'openai' %}selected{% endif %}>OpenAI</option>
-                    <option value="gemini" {% if config.llm_provider == 'gemini' %}selected{% endif %}>Google Gemini</option>
-                    <option value="openrouter" {% if config.llm_provider == 'openrouter' %}selected{% endif %}>OpenRouter</option>
+                <label for="ai_extraction_provider">Provider</label>
+                <select id="ai_extraction_provider" name="ai_extraction_provider"
+                        class="form-select" data-provider-picker
+                        data-selected="{{ config.ai_extraction_provider or config.llm_provider }}">
                 </select>
-            </div>
-
-            <div class="provider-fields" data-provider="openai" {% if config.llm_provider != 'openai' %}hidden{% endif %}>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="openai_api_key">OpenAI API Key</label>
-                        <input type="password" id="openai_api_key" name="openai_api_key"
-                               value="{{ config.openai_api_key }}" placeholder="sk-..."
-                               autocomplete="off" autocapitalize="none" spellcheck="false">
-                    </div>
-                    <div class="form-group">
-                        <label for="openai_model">OpenAI Model</label>
-                        <input type="text" id="openai_model" name="openai_model"
-                               value="{{ config.openai_model }}" placeholder="gpt-4"
-                               autocomplete="off" autocapitalize="none" spellcheck="false">
-                    </div>
-                </div>
-            </div>
-
-            <div class="provider-fields" data-provider="gemini" {% if config.llm_provider != 'gemini' %}hidden{% endif %}>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="gemini_api_key">Gemini API Key</label>
-                        <input type="password" id="gemini_api_key" name="gemini_api_key"
-                               value="{{ config.gemini_api_key }}" placeholder="AIza..."
-                               autocomplete="off" autocapitalize="none" spellcheck="false">
-                    </div>
-                    <div class="form-group">
-                        <label for="gemini_model">Gemini Model</label>
-                        <input type="text" id="gemini_model" name="gemini_model"
-                               value="{{ config.gemini_model }}" placeholder="gemini-2.5-flash"
-                               autocomplete="off" autocapitalize="none" spellcheck="false">
-                    </div>
-                </div>
-            </div>
-
-            <div class="provider-fields" data-provider="openrouter" {% if config.llm_provider != 'openrouter' %}hidden{% endif %}>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="openrouter_api_key">OpenRouter API Key</label>
-                        <input type="password" id="openrouter_api_key" name="openrouter_api_key"
-                               value="{{ config.openrouter_api_key }}" placeholder="sk-or-..."
-                               autocomplete="off" autocapitalize="none" spellcheck="false">
-                    </div>
-                    <div class="form-group">
-                        <label for="openrouter_model">OpenRouter Model</label>
-                        <input type="text" id="openrouter_model" name="openrouter_model"
-                               value="{{ config.openrouter_model }}" placeholder="openai/gpt-4o-mini"
-                               autocomplete="off" autocapitalize="none" spellcheck="false">
-                    </div>
-                </div>
-                <small class="form-hint">Use a vision-capable model slug (e.g. <code>openai/gpt-4o-mini</code> or <code>google/gemini-2.5-flash</code>). Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>. Stored in this instance's database, never in source code.</small>
             </div>
         </div>
 
@@ -194,30 +199,62 @@
             </div>
         </div>
 
-        <!-- Whisper Settings -->
+        <!-- Speech to text -->
         <div class="settings-section">
-            <h2><i class="fas fa-microphone"></i> Whisper Transcription</h2>
-            
+            <h2><i class="fas fa-microphone"></i> Speech to Text</h2>
+            <p class="section-description">Turning the video's audio into text. Whisper runs on this server and needs no API; a provider transcribes over the network instead, which is faster on a small machine.</p>
+
             <div class="form-group">
-                <label for="whisper_model">Whisper Model</label>
-                <select id="whisper_model" name="whisper_model" class="form-select">
-                    <option value="tiny" {% if config.whisper_model == 'tiny' %}selected{% endif %}>Tiny (fastest, least accurate)</option>
-                    <option value="base" {% if config.whisper_model == 'base' %}selected{% endif %}>Base</option>
-                    <option value="small" {% if config.whisper_model == 'small' %}selected{% endif %}>Small (recommended)</option>
-                    <option value="medium" {% if config.whisper_model == 'medium' %}selected{% endif %}>Medium</option>
-                    <option value="large-v3" {% if config.whisper_model == 'large-v3' %}selected{% endif %}>Large v3 (slowest, most accurate)</option>
+                <label for="transcription_mode">Transcribe with</label>
+                <select id="transcription_mode" name="transcription_mode" class="form-select">
+                    <option value="local" {% if config.transcription_mode != 'provider' %}selected{% endif %}>Whisper on this server (no API needed)</option>
+                    <option value="provider" {% if config.transcription_mode == 'provider' %}selected{% endif %}>One of the AI providers above</option>
                 </select>
-                <small class="form-hint">Larger models are more accurate but slower. 'Small' is recommended for mixed-language content.</small>
             </div>
-            
-            <div class="form-group">
-                <label for="hf_token">HuggingFace Token</label>
-                <input type="password" id="hf_token" name="hf_token"
-                       value="{{ config.hf_token }}" placeholder="hf_...">
-                <small class="form-hint">Optional. Enables faster model downloads and higher rate limits. Get one at <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a></small>
+
+            <div data-transcription-mode="local" {% if config.transcription_mode == 'provider' %}hidden{% endif %}>
+                <div class="form-group">
+                    <label for="whisper_model">Whisper model</label>
+                    <select id="whisper_model" name="whisper_model" class="form-select">
+                        <option value="tiny" {% if config.whisper_model == 'tiny' %}selected{% endif %}>Tiny (fastest, least accurate)</option>
+                        <option value="base" {% if config.whisper_model == 'base' %}selected{% endif %}>Base</option>
+                        <option value="small" {% if config.whisper_model == 'small' %}selected{% endif %}>Small (recommended)</option>
+                        <option value="medium" {% if config.whisper_model == 'medium' %}selected{% endif %}>Medium</option>
+                        <option value="large-v3" {% if config.whisper_model == 'large-v3' %}selected{% endif %}>Large v3 (slowest, most accurate)</option>
+                    </select>
+                    <small class="form-hint">Larger models are more accurate but slower. 'Small' is recommended for mixed-language content.</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="hf_token">HuggingFace token</label>
+                    <input type="password" id="hf_token" name="hf_token"
+                           value="{{ config.hf_token }}" placeholder="hf_...">
+                    <small class="form-hint">Optional, and not an AI provider key: it only downloads the Whisper weights faster and at a higher rate limit. Get one at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">huggingface.co/settings/tokens</a>.</small>
+                </div>
+            </div>
+
+            <div data-transcription-mode="provider" {% if config.transcription_mode != 'provider' %}hidden{% endif %}>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="transcription_provider">Provider</label>
+                        <select id="transcription_provider" name="transcription_provider"
+                                class="form-select" data-provider-picker
+                                data-selected="{{ config.transcription_provider }}"
+                                data-audio-only="1"></select>
+                        <small class="form-hint">Only providers with an OpenAI-compatible audio endpoint can transcribe.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="transcription_model">Model</label>
+                        <input type="text" id="transcription_model" name="transcription_model"
+                               value="{{ config.transcription_model }}" placeholder="whisper-1"
+                               autocomplete="off" autocapitalize="none" spellcheck="false">
+                        <small class="form-hint">For example <code>whisper-1</code>, <code>gpt-4o-transcribe</code> or <code>whisper-large-v3</code>.</small>
+                    </div>
+                </div>
+                <small class="form-hint">If the provider fails, the job falls back to Whisper on this server rather than losing the audio.</small>
             </div>
         </div>
-        
+
         <!-- YouTube / Video Download Settings -->
         <div class="settings-section">
             <h2><i class="fas fa-video"></i> Video Downloads (YouTube, Instagram, etc.)</h2>
@@ -330,15 +367,153 @@
 </div>
 
 <script>
-// ===== AI provider: show only the fields for the selected provider =====
-const providerSelect = document.getElementById('llm_provider');
-function syncProviderFields() {
-    document.querySelectorAll('.provider-fields').forEach(group => {
-        group.hidden = group.dataset.provider !== providerSelect.value;
+// ===== AI providers: add, remove, and keep the pickers in step =====
+const API_TYPES = {{ api_types|tojson }};
+const AUDIO_TYPES = ['openai', 'openai-compatible'];
+const providerRows = document.getElementById('provider-rows');
+
+function rowFields(row) {
+    return {
+        name: row.querySelector('[data-provider-name]'),
+        type: row.querySelector('[data-provider-type]'),
+        model: row.querySelector('[data-provider-model]'),
+        baseUrl: row.querySelector('[data-provider-base-url]'),
+        baseGroup: row.querySelector('[data-base-url-group]'),
+        id: row.querySelector('input[name="provider_id[]"]'),
+    };
+}
+
+// A base URL only means something for the OpenAI-compatible dialect; showing
+// it against Gemini invites someone to fill in a field that is then ignored.
+function syncBaseUrl(row) {
+    const f = rowFields(row);
+    const spec = API_TYPES[f.type.value] || {};
+    f.baseGroup.hidden = !spec.needs_base_url;
+    if (spec.needs_base_url && !f.baseUrl.value) {
+        f.baseUrl.placeholder = spec.default_base_url || 'https://api.example.com/v1';
+    }
+}
+
+// Model names are suggestions, never a closed list: the field stays free text
+// and the datalist just saves people looking an id up.
+const catalogCache = {};
+async function loadSuggestions(row) {
+    const f = rowFields(row);
+    const list = row.querySelector('datalist');
+    if (!list) return;
+    const spec = API_TYPES[f.type.value] || {};
+    let catalog = spec.catalog || '';
+    if (!catalog && f.baseUrl.value) {
+        catalog = COMPATIBLE_CATALOGS[hostOf(f.baseUrl.value)] || '';
+    }
+    list.innerHTML = '';
+    if (!catalog) return;
+    if (!catalogCache[catalog]) {
+        try {
+            const resp = await fetch('/api/ai/model-catalog?catalog=' + encodeURIComponent(catalog));
+            catalogCache[catalog] = (await resp.json()).models || [];
+        } catch (err) {
+            catalogCache[catalog] = [];
+        }
+    }
+    for (const model of catalogCache[catalog]) {
+        const option = document.createElement('option');
+        option.value = model.id;
+        option.label = model.name;
+        list.appendChild(option);
+    }
+}
+
+const COMPATIBLE_CATALOGS = {{ compatible_catalogs|tojson }};
+function hostOf(url) {
+    try { return new URL(url).hostname.toLowerCase(); } catch (err) { return ''; }
+}
+
+// The extraction and transcription pickers are views onto the rows above, so
+// they are rebuilt from the DOM rather than rendered once server-side.
+function syncProviderPickers() {
+    const rows = Array.from(providerRows.querySelectorAll('[data-provider-row]'));
+    document.querySelectorAll('[data-provider-picker]').forEach(picker => {
+        const audioOnly = picker.dataset.audioOnly === '1';
+        const wanted = picker.value || picker.dataset.selected || '';
+        picker.innerHTML = '';
+        let matched = false;
+        rows.forEach(row => {
+            const f = rowFields(row);
+            const name = (f.name.value || '').trim();
+            if (!name) return;
+            if (audioOnly && !AUDIO_TYPES.includes(f.type.value)) return;
+            const option = document.createElement('option');
+            option.value = f.id.value;
+            option.textContent = name;
+            if (f.id.value === wanted) { option.selected = true; matched = true; }
+            picker.appendChild(option);
+        });
+        if (!matched && picker.options.length) picker.options[0].selected = true;
+        if (!picker.options.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = audioOnly
+                ? 'No provider with an audio endpoint'
+                : 'No provider configured';
+            picker.appendChild(option);
+        }
     });
 }
-providerSelect.addEventListener('change', syncProviderFields);
-syncProviderFields();
+
+function wireRow(row) {
+    const f = rowFields(row);
+    f.type.addEventListener('change', () => {
+        syncBaseUrl(row);
+        loadSuggestions(row);
+        syncProviderPickers();
+    });
+    f.baseUrl.addEventListener('change', () => loadSuggestions(row));
+    f.name.addEventListener('input', syncProviderPickers);
+    row.querySelector('[data-remove-provider]').addEventListener('click', () => {
+        row.remove();
+        syncProviderPickers();
+    });
+    syncBaseUrl(row);
+    loadSuggestions(row);
+}
+
+providerRows.querySelectorAll('[data-provider-row]').forEach(wireRow);
+
+document.getElementById('add-provider-btn').addEventListener('click', () => {
+    const template = providerRows.querySelector('[data-provider-row]');
+    if (!template) {
+        window.location.reload();  // nothing to clone from on a fresh instance
+        return;
+    }
+    const row = template.cloneNode(true);
+    const f = rowFields(row);
+    f.name.value = '';
+    f.model.value = '';
+    f.baseUrl.value = '';
+    // A blank id makes the server slugify the name, which keeps ids readable.
+    f.id.value = '';
+    row.querySelector('input[name="provider_api_key[]"]').value = '';
+    const list = row.querySelector('datalist');
+    if (list) list.id = 'model-suggestions-' + Date.now();
+    if (list) f.model.setAttribute('list', list.id);
+    providerRows.appendChild(row);
+    wireRow(row);
+    syncProviderPickers();
+    f.name.focus();
+});
+
+syncProviderPickers();
+
+// ===== Speech to text: local Whisper or a configured provider =====
+const transcriptionMode = document.getElementById('transcription_mode');
+function syncTranscriptionMode() {
+    document.querySelectorAll('[data-transcription-mode]').forEach(group => {
+        group.hidden = group.dataset.transcriptionMode !== transcriptionMode.value;
+    });
+}
+transcriptionMode.addEventListener('change', syncTranscriptionMode);
+syncTranscriptionMode();
 
 // ===== Export targets: independent enable/disable cards =====
 function syncTargetCard(toggle) {

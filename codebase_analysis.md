@@ -34,10 +34,9 @@ pick-a-recipe/
 ├── tandoor.py           # Tandoor recipe manager integration
 ├── recipe_exporter.py   # Recipe export utilities
 ├── helpers.py           # Utility functions and AI prompts
-├── llm_providers/       # Modular LLM provider implementations
-│   ├── base.py          # Abstract base class
-│   ├── openai.py        # OpenAI GPT integration
-│   └── gemini.py        # Google Gemini integration
+├── ai_providers.py      # Configurable AI providers + one client per dialect
+├── frame_selector.py    # Picks the dish photo via the configured provider
+├── model_catalog.py     # models.dev suggestions for the settings page
 ├── ui/                  # Flask web application
 │   ├── app.py           # Main Flask app with authentication
 │   ├── database.py      # SQLite database operations
@@ -73,11 +72,15 @@ pick-a-recipe/
 - **Background Job Processing** with progress tracking
 - **PWA Support** for mobile app installation and sharing integration
 
-### LLM Provider Pattern
-- **Abstract Base Class** (`llm_providers/base.py`) for consistent interface
-- **OpenAI Provider** (`llm_providers/openai.py`) - GPT models
-- **Gemini Provider** (`llm_providers/gemini.py`) - Google Gemini models
-- **Configurable Selection** via web UI settings
+### AI Provider Pattern
+- **User-defined providers** (`ai_providers.py`): a name, an API dialect, a key,
+  a model and optionally a base URL, stored as JSON in the config table
+- **Four dialects**: OpenAI Responses, OpenAI-compatible Chat Completions (any
+  base URL), Google Gemini, Anthropic Messages
+- **One session type** (`AiSession`) serving text, image and video calls, so
+  Chef, the transcriber and frame selection share a single abstraction
+- **Per-capability selection** via web UI settings: which provider extracts
+  recipes, and which one (if any) transcribes audio
 
 ## Key Features
 
@@ -192,7 +195,8 @@ python main.py "https://www.tiktok.com/@user/video/123"
 ## Development Considerations
 
 ### Extensibility
-- New LLM providers can be added by extending `llm_providers/base.py`
+- A new API dialect is a `_TEXT_CALLS` / `_IMAGE_CALLS` entry in `ai_providers.py`;
+  anything speaking an existing dialect needs no code at all, just a base URL
 - Recipe manager integrations follow consistent pattern (`mealie.py`, `tandoor.py`)
 - Configuration system easily supports new settings
 

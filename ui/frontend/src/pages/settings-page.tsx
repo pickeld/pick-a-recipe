@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -18,11 +18,12 @@ import {
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
-import type { AppConfig } from '@/types'
+import type { AiProvider, AppConfig } from '@/types'
 import { useSession } from '@/hooks/use-session'
 import { AccountCard } from '@/components/settings/account-card'
 import { NotificationsCard } from '@/components/settings/notifications-card'
 import { UsersCard } from '@/components/settings/users-card'
+import { AiProvidersCard } from '@/components/settings/ai-providers-card'
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -49,6 +50,44 @@ import {
 } from '@/components/ui/alert-dialog'
 
 type Draft = Partial<AppConfig>
+
+// The dialects that expose an OpenAI-compatible /audio/transcriptions endpoint.
+const AUDIO_API_TYPES = ['openai', 'openai-compatible']
+
+/** Picks one of the configured providers by id, showing its name. */
+function ProviderPicker({
+  providers,
+  value,
+  onChange,
+  emptyLabel = 'No provider configured',
+}: {
+  providers: AiProvider[]
+  value: string
+  onChange: (value: string) => void
+  emptyLabel?: string
+}) {
+  const named = providers.filter(p => p.name.trim())
+  if (named.length === 0) {
+    return <p className="text-sm text-muted-foreground">{emptyLabel}</p>
+  }
+  // A provider that was renamed or removed leaves the saved id pointing
+  // nowhere; falling back to the first keeps the select from rendering blank.
+  const current = named.some(p => p.id === value) ? value : named[0].id
+  return (
+    <Select value={current} onValueChange={onChange}>
+      <SelectTrigger className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {named.map(provider => (
+          <SelectItem key={provider.id} value={provider.id}>
+            {provider.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
 
 function useDraft(loaded: AppConfig | undefined) {
   const [draft, setDraft] = useState<Draft>({})
@@ -100,6 +139,18 @@ export function SettingsPage() {
   })
 
   const { get, set, reset, draft, dirty } = useDraft(loaded)
+
+  const [providers, setProvidersState] = useState<AiProvider[] | null>(null)
+
+  const setProviders = useCallback(
+    (next: AiProvider[]) => {
+      // Adopting the server's registry on first render is not an edit, so
+      // only a later change marks the form dirty and gets saved.
+      if (providers !== null) set('ai_providers', JSON.stringify(next))
+      setProvidersState(next)
+    },
+    [providers, set],
+  )
 
   const [saving, setSaving] = useState(false)
   const [cookiesUploading, setCookiesUploading] = useState(false)
@@ -181,7 +232,12 @@ export function SettingsPage() {
     }
   }
 
-  const provider = get('llm_provider') || 'openai'
+  // null until the providers card has adopted the server's (already migrated)
+  // registry, so an unedited page never saves a list it has not seen.
+  const providerRows = providers ?? []
+  const extractionProvider =
+    get('ai_extraction_provider') || get('llm_provider') || providerRows[0]?.id || ''
+  const transcriptionMode = get('transcription_mode') || 'local'
   const mealieEnabled = get('mealie_enabled') === 'true'
   const tandoorEnabled = get('tandoor_enabled') === 'true'
   const confirmBeforeUpload = get('confirm_before_upload') === 'true'
@@ -217,110 +273,29 @@ export function SettingsPage() {
         <p className="text-sm text-muted-foreground mt-1">Configure your Pick-a-Recipe application</p>
       </div>
 
-      {/* AI Provider */}
+      <AiProvidersCard providers={providers} onChange={setProviders} />
+
+      {/* AI Extraction */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <BrainIcon className="size-4" />
-            AI Provider
+            AI Extraction
           </CardTitle>
           <CardDescription>
-            Used to turn raw video/page content into a structured recipe.
+            Which of the providers above turns raw video and page content into a
+            structured recipe. It also reads on-screen text and picks the dish photo,
+            so it needs a model that can see images.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <CardContent>
           <Field label="Provider">
-            <Select
-              value={provider}
-              onValueChange={v =>
-                set('llm_provider', v as 'openai' | 'gemini' | 'openrouter')
-              }
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">OpenAI</SelectItem>
-                <SelectItem value="gemini">Google Gemini</SelectItem>
-                <SelectItem value="openrouter">OpenRouter</SelectItem>
-              </SelectContent>
-            </Select>
+            <ProviderPicker
+              providers={providerRows}
+              value={extractionProvider}
+              onChange={v => set('ai_extraction_provider', v)}
+            />
           </Field>
-
-          {provider === 'openai' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="OpenAI API Key">
-                <Input
-                  type="password"
-                  placeholder="sk-..."
-                  autoComplete="off"
-                  value={get('openai_api_key')}
-                  onChange={e => set('openai_api_key', e.target.value)}
-                />
-              </Field>
-              <Field label="OpenAI Model">
-                <Input
-                  type="text"
-                  placeholder="gpt-4"
-                  autoComplete="off"
-                  value={get('openai_model')}
-                  onChange={e => set('openai_model', e.target.value)}
-                />
-              </Field>
-            </div>
-          )}
-
-          {provider === 'gemini' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Gemini API Key">
-                <Input
-                  type="password"
-                  placeholder="AIza..."
-                  autoComplete="off"
-                  value={get('gemini_api_key')}
-                  onChange={e => set('gemini_api_key', e.target.value)}
-                />
-              </Field>
-              <Field label="Gemini Model">
-                <Input
-                  type="text"
-                  placeholder="gemini-2.5-flash"
-                  autoComplete="off"
-                  value={get('gemini_model')}
-                  onChange={e => set('gemini_model', e.target.value)}
-                />
-              </Field>
-            </div>
-          )}
-
-          {provider === 'openrouter' && (
-            <div className="flex flex-col gap-2">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="OpenRouter API Key">
-                  <Input
-                    type="password"
-                    placeholder="sk-or-..."
-                    autoComplete="off"
-                    value={get('openrouter_api_key')}
-                    onChange={e => set('openrouter_api_key', e.target.value)}
-                  />
-                </Field>
-                <Field label="OpenRouter Model">
-                  <Input
-                    type="text"
-                    placeholder="openai/gpt-4o-mini"
-                    autoComplete="off"
-                    value={get('openrouter_model')}
-                    onChange={e => set('openrouter_model', e.target.value)}
-                  />
-                </Field>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Use a vision-capable model slug (e.g. openai/gpt-4o-mini or
-                google/gemini-2.5-flash). Get a key at openrouter.ai/keys.
-              </p>
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -517,59 +492,118 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Whisper */}
+      {/* Speech to text */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <MicIcon className="size-4" />
-            Whisper Transcription
+            Speech to Text
           </CardTitle>
+          <CardDescription>
+            Turning the video&apos;s audio into text. Whisper runs on this server and
+            needs no API; a provider transcribes over the network instead, which is
+            faster on a small machine.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <Field
-            label="Whisper Model"
-            hint="Larger models are more accurate but slower. 'Small' is recommended for mixed-language content."
-          >
+          <Field label="Transcribe with">
             <Select
-              value={get('whisper_model') || 'small'}
-              onValueChange={v => set('whisper_model', v)}
+              value={transcriptionMode}
+              onValueChange={v => set('transcription_mode', v)}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="tiny">Tiny (fastest, least accurate)</SelectItem>
-                <SelectItem value="base">Base</SelectItem>
-                <SelectItem value="small">Small (recommended)</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="large-v3">Large v3 (slowest, most accurate)</SelectItem>
+                <SelectItem value="local">Whisper on this server (no API needed)</SelectItem>
+                <SelectItem value="provider">One of the AI providers above</SelectItem>
               </SelectContent>
             </Select>
           </Field>
 
-          <Field
-            label="HuggingFace Token"
-            hint={
-              <>
-                Optional. Enables faster model downloads and higher rate limits. Get one at{' '}
-                <a
-                  href="https://huggingface.co/settings/tokens"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline underline-offset-2 hover:text-foreground"
+          {transcriptionMode === 'local' ? (
+            <>
+              <Field
+                label="Whisper model"
+                hint="Larger models are more accurate but slower. 'Small' is recommended for mixed-language content."
+              >
+                <Select
+                  value={get('whisper_model') || 'small'}
+                  onValueChange={v => set('whisper_model', v)}
                 >
-                  huggingface.co/settings/tokens
-                </a>
-              </>
-            }
-          >
-            <Input
-              type="password"
-              placeholder="hf_..."
-              value={get('hf_token')}
-              onChange={e => set('hf_token', e.target.value)}
-            />
-          </Field>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tiny">Tiny (fastest, least accurate)</SelectItem>
+                    <SelectItem value="base">Base</SelectItem>
+                    <SelectItem value="small">Small (recommended)</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="large-v3">Large v3 (slowest, most accurate)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+
+              <Field
+                label="HuggingFace token"
+                hint={
+                  <>
+                    Optional, and not an AI provider key: it only downloads the Whisper
+                    weights faster and at a higher rate limit. Get one at{' '}
+                    <a
+                      href="https://huggingface.co/settings/tokens"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      huggingface.co/settings/tokens
+                    </a>
+                  </>
+                }
+              >
+                <Input
+                  type="password"
+                  placeholder="hf_..."
+                  value={get('hf_token')}
+                  onChange={e => set('hf_token', e.target.value)}
+                />
+              </Field>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field
+                  label="Provider"
+                  hint="Only providers with an OpenAI-compatible audio endpoint can transcribe."
+                >
+                  <ProviderPicker
+                    providers={providerRows.filter(p => AUDIO_API_TYPES.includes(p.api_type))}
+                    value={get('transcription_provider')}
+                    onChange={v => set('transcription_provider', v)}
+                    emptyLabel="No provider with an audio endpoint"
+                  />
+                </Field>
+                <Field
+                  label="Model"
+                  hint="For example whisper-1, gpt-4o-transcribe or whisper-large-v3."
+                >
+                  <Input
+                    type="text"
+                    placeholder="whisper-1"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    value={get('transcription_model')}
+                    onChange={e => set('transcription_model', e.target.value)}
+                  />
+                </Field>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                If the provider fails, the job falls back to Whisper on this server
+                rather than losing the audio.
+              </p>
+            </>
+          )}
         </CardContent>
       </Card>
 
