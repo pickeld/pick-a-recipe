@@ -256,10 +256,40 @@ export interface ReuploadResult {
   image_uploaded: boolean
 }
 
+// ===== AI providers =====
+
+/** One configured way to reach a model. */
+export interface AiProvider {
+  id: string
+  name: string
+  api_type: string
+  api_key: string
+  base_url: string
+  model: string
+}
+
+/** What an API dialect needs, for rendering its fields. */
+export interface ApiTypeSpec {
+  label: string
+  needs_base_url: boolean
+  default_base_url: string
+  /** models.dev provider id whose models to suggest, or '' for none. */
+  catalog: string
+  example_model: string
+}
+
 // ===== Config / settings =====
 
 /** Every value is stored & returned as a string by the backend. */
 export interface AppConfig {
+  /** JSON array of AiProvider; see the AI Providers card. */
+  ai_providers: string
+  ai_extraction_provider: string
+  /** 'local' runs Whisper here, 'provider' posts audio to a provider. */
+  transcription_mode: string
+  transcription_provider: string
+  transcription_model: string
+  /** Superseded by ai_providers; still read when migrating an old install. */
   llm_provider: 'openai' | 'gemini' | 'openrouter'
   openai_api_key: string
   openai_model: string

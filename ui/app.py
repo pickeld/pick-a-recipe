@@ -1103,6 +1103,89 @@ def logout():
     return redirect(url_for('login'))
 
 
+def _providers_from_form(form) -> str:
+    """Rebuild the provider registry from the settings form's repeated fields.
+
+    The plain-HTML settings page posts one parallel list per column rather than
+    JSON, so rows arrive as provider_name[], provider_api_type[] and so on. A
+    row with neither a name nor a model is an empty template row the user never
+    filled in, and is dropped.
+    """
+    from ai_providers import AiProvider, serialize_providers, slugify
+
+    names = form.getlist('provider_name[]')
+    api_types = form.getlist('provider_api_type[]')
+    keys = form.getlist('provider_api_key[]')
+    base_urls = form.getlist('provider_base_url[]')
+    models = form.getlist('provider_model[]')
+    ids = form.getlist('provider_id[]')
+
+    providers = []
+    seen = set()
+    for index, name in enumerate(names):
+        def _at(values, default=''):
+            return values[index].strip() if index < len(values) else default
+
+        name = name.strip()
+        model = _at(models)
+        if not name and not model:
+            continue
+        provider_id = _at(ids) or slugify(name)
+        if provider_id in seen:
+            provider_id = f'{provider_id}-{index}'
+        seen.add(provider_id)
+        providers.append(AiProvider(
+            id=provider_id,
+            name=name or provider_id,
+            api_type=_at(api_types),
+            api_key=_at(keys),
+            base_url=_at(base_urls),
+            model=model,
+        ))
+    return serialize_providers(providers)
+
+
+@app.route('/api/ai/providers', methods=['GET'])
+@api_admin_required
+def api_ai_providers():
+    """The provider registry, already migrated, plus the dialects to choose from.
+
+    Served rather than derived in the browser so the legacy-settings migration
+    lives in exactly one place.
+    """
+    from dataclasses import asdict
+
+    from ai_providers import _COMPATIBLE_CATALOGS, API_TYPES, load_providers
+
+    return jsonify({
+        'providers': [asdict(p) for p in load_providers()],
+        'api_types': API_TYPES,
+        'compatible_catalogs': _COMPATIBLE_CATALOGS,
+    })
+
+
+@app.route('/api/ai/model-catalog', methods=['GET'])
+@api_admin_required
+def api_model_catalog():
+    """Model-name suggestions for a provider, from models.dev.
+
+    Only ever suggestions: every model field accepts a typed value, so a
+    provider models.dev does not list (a self-hosted gateway, a brand-new
+    release) is still perfectly usable.
+    """
+    from model_catalog import catalog_models
+
+    catalog = (request.args.get('catalog') or '').strip()
+    if not catalog:
+        return jsonify({'models': []})
+    try:
+        return jsonify({'catalog': catalog, 'models': catalog_models(catalog)})
+    except Exception as exc:
+        # A suggestion list is not worth failing the settings page over.
+        app.logger.info('[AI] model catalog unavailable: %s', exc)
+        return jsonify({'models': [], 'error': 'Model suggestions are unavailable.'})
+
+
 @app.route('/settings', methods=['GET', 'POST'])
 @login_required
 def settings():
@@ -1111,13 +1194,15 @@ def settings():
 
     if request.method == 'POST':
         # Update configuration from form
-        config['llm_provider'] = request.form.get('llm_provider', 'openai')
-        config['openai_api_key'] = request.form.get('openai_api_key', '')
-        config['openai_model'] = request.form.get('openai_model', '')
-        config['gemini_api_key'] = request.form.get('gemini_api_key', '')
-        config['gemini_model'] = request.form.get('gemini_model', '')
-        config['openrouter_api_key'] = request.form.get('openrouter_api_key', '')
-        config['openrouter_model'] = request.form.get('openrouter_model', '')
+        config['ai_providers'] = _providers_from_form(request.form)
+        config['ai_extraction_provider'] = request.form.get(
+            'ai_extraction_provider', '')
+        config['transcription_mode'] = request.form.get(
+            'transcription_mode', 'local')
+        config['transcription_provider'] = request.form.get(
+            'transcription_provider', '')
+        config['transcription_model'] = request.form.get(
+            'transcription_model', 'whisper-1')
         config['recipe_lang'] = request.form.get('recipe_lang', 'hebrew')
         config['mealie_api_key'] = request.form.get('mealie_api_key', '')
         config['mealie_host'] = request.form.get('mealie_host', '')
@@ -1141,10 +1226,15 @@ def settings():
         flash('Settings saved successfully!', 'success')
         return redirect(url_for('settings'))
 
+    from ai_providers import _COMPATIBLE_CATALOGS, API_TYPES, load_providers
+
     return render_template(
         'settings.html',
         config=config,
         max_concurrent=resolve_max_concurrent(),
+        api_types=API_TYPES,
+        compatible_catalogs=_COMPATIBLE_CATALOGS,
+        ai_providers=load_providers(),
     )
 
 
@@ -1926,6 +2016,12 @@ def api_post_config():
     filtered = {k: v for k, v in data.items() if k in valid_keys}
     if not filtered:
         return jsonify({'error': 'No valid configuration keys provided'}), 400
+    if 'ai_providers' in filtered:
+        # Normalise before storing: a malformed registry would otherwise only
+        # surface much later, as an extraction that cannot find its provider.
+        from ai_providers import parse_providers, serialize_providers
+        filtered['ai_providers'] = serialize_providers(
+            parse_providers(filtered['ai_providers']))
     current = load_config()
     current.update(filtered)
     save_config(current)

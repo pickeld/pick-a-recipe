@@ -36,11 +36,11 @@
           "used_by": "transcriber.py::Transcriber.extract_visual_text"
         },
         {
-          "name": "_get_selection_prompt",
-          "file": "llm_providers/base.py",
-          "source_id": "llm_providers/base.py::LLMImageSelector::_get_selection_prompt#0",
+          "name": "selection_prompt",
+          "file": "frame_selector.py",
+          "source_id": "frame_selector.py::<module>::selection_prompt#0",
           "description": "",
-          "used_by": "llm_providers.openai.OpenAIImageSelector.select_best_frame"
+          "used_by": "frame_selector.py::select_best_frame"
         }
       ],
       "guardrails": [

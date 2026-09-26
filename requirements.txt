@@ -1,6 +1,9 @@
 yt-dlp[curl-cffi]
 faster_whisper
 openai
+# Only needed for a provider configured with the Anthropic API type; imported
+# lazily so the rest of the app runs without it.
+anthropic
 pydantic>=2
 python-dotenv
 requests

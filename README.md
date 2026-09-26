@@ -19,7 +19,7 @@ Pick-a-Recipe is a Python application that:
 1. **Downloads videos** from TikTok, YouTube, Instagram, and other platforms using `yt-dlp`
 2. **Transcribes audio** using Whisper AI (via `faster-whisper`)
 3. **Extracts on-screen text** (ingredients, instructions) using vision-capable LLMs
-4. **Generates structured recipes** using AI (OpenAI GPT, Google Gemini, or OpenRouter)
+4. **Generates structured recipes** using an AI provider you configure (OpenAI, Google Gemini, Anthropic, or any OpenAI-compatible endpoint)
 5. **Uploads to recipe managers** - supports [Tandoor](https://tandoor.dev/) and [Mealie](https://mealie.io/)
 
 ### Features
@@ -39,7 +39,7 @@ Pick-a-Recipe is a Python application that:
 
 - Python 3.11+
 - FFmpeg (for video/audio processing)
-- API key for OpenAI, Google Gemini, or OpenRouter
+- An API key for OpenAI, Google Gemini or Anthropic — or any OpenAI-compatible endpoint (OpenRouter, Groq, a local Ollama, …)
 - Self-hosted Tandoor or Mealie instance (optional)
 
 ## Installation
@@ -274,13 +274,9 @@ sessions; cookies take precedence when both are present.
 
 | Setting | Description |
 |---------|-------------|
-| **LLM Provider** | Choose between OpenAI, Google Gemini, or OpenRouter |
-| **OpenAI API Key** | Your OpenAI API key (required if using OpenAI) |
-| **OpenAI Model** | Model to use (default: `gpt-5-mini-2025-08-07`) |
-| **Gemini API Key** | Your Google Gemini API key (required if using Gemini) |
-| **Gemini Model** | Model to use (default: `gemini-2.5-flash`) |
-| **OpenRouter API Key** | Your [OpenRouter](https://openrouter.ai/keys) API key (required if using OpenRouter) |
-| **OpenRouter Model** | Vision-capable model slug (default: `openai/gpt-4o-mini`) |
+| **AI Providers** | The models this instance can reach — see [AI providers](#ai-providers) |
+| **AI Extraction** | Which provider turns video and page content into a recipe |
+| **Speech to Text** | Whisper on this server, or a provider with an audio endpoint |
 | **Recipe Language** | Target language for recipe output (e.g., `hebrew`, `english`) |
 | **Target Language Code** | ISO language code for transcription (e.g., `he`, `en`) |
 | **Whisper Model** | Whisper model size (`tiny`, `small`, `medium`, `large`) |
@@ -290,6 +286,47 @@ sessions; cookies take precedence when both are present.
 | **Mealie Host** | URL of your Mealie instance |
 | **Mealie API Key** | API token from Mealie |
 | **Confirm Before Upload** | Show recipe preview before uploading |
+
+#### AI providers
+
+Nothing is hardcoded to a vendor. Under **Settings -> AI Providers** you add as
+many providers as you like, each one a name plus four things:
+
+| Field | What it is |
+|-------|------------|
+| **API type** | The dialect the endpoint speaks: OpenAI (Responses API), OpenAI-compatible (Chat Completions), Google Gemini, or Anthropic (Claude) |
+| **API key** | The provider's key. A local server (Ollama, LM Studio, vLLM) needs none |
+| **Model** | Free text, always. Suggestions come from [models.dev](https://models.dev), but a model it has never heard of works just the same |
+| **Base URL** | Only for OpenAI-compatible endpoints — `https://openrouter.ai/api/v1`, `https://api.groq.com/openai/v1`, `http://localhost:11434/v1`, whatever you run |
+
+So OpenRouter is no longer a special case in the code: it is one
+OpenAI-compatible endpoint among many, distinguished only by its base URL. The
+same field reaches Groq, Together, DeepSeek, Mistral, xAI, LiteLLM, a
+self-hosted vLLM or an Ollama on your LAN.
+
+The sections below then *choose* from those providers rather than carrying keys
+of their own:
+
+- **AI Extraction** turns video and page content into a structured recipe. It
+  also reads on-screen text and picks the dish photo, so it needs a model that
+  can see images.
+- **Speech to Text** either runs Whisper on this server — no API, no network —
+  or posts the audio to a provider with an OpenAI-compatible
+  `/audio/transcriptions` endpoint. A provider that fails falls back to local
+  Whisper rather than losing the audio.
+
+The HuggingFace token under Speech to Text is not an AI provider key: it only
+makes the Whisper weights download faster and at a higher rate limit.
+
+If a model is retired, the app fails over to the next known-good model for that
+dialect and writes the working one back to that provider. OpenAI-compatible
+providers have no such chain — a model name that works on Groq is a 404 on
+OpenRouter — so there you get a clear error naming the provider instead.
+
+*Upgrading:* an existing install keeps working untouched. The old
+`llm_provider`, `openai_*`, `gemini_*` and `openrouter_*` settings are read as a
+provider registry on first load, with the provider you had selected still
+selected.
 
 ## Usage
 
@@ -346,11 +383,9 @@ pick-a-recipe/
 ├── tandoor.py           # Tandoor API integration
 ├── recipe_exporter.py   # Recipe export utilities
 ├── helpers.py           # Utility functions and prompts
-├── llm_providers/       # LLM provider implementations
-│   ├── base.py
-│   ├── openai.py
-│   ├── gemini.py
-│   └── openrouter.py
+├── ai_providers.py      # Configurable AI providers + one client per dialect
+├── frame_selector.py    # Picks the dish photo via the configured provider
+├── model_catalog.py     # models.dev suggestions for the settings page
 ├── ui/                  # Flask web UI
 │   ├── app.py           # Flask application
 │   ├── database.py      # SQLite database management
