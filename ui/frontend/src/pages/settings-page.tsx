@@ -185,6 +185,8 @@ export function SettingsPage() {
   const mealieEnabled = get('mealie_enabled') === 'true'
   const tandoorEnabled = get('tandoor_enabled') === 'true'
   const confirmBeforeUpload = get('confirm_before_upload') === 'true'
+  // Default on: the lookup needs no key, so only an explicit 'false' means off.
+  const nutritionLookupEnabled = get('nutrition_lookup_enabled') !== 'false'
   const hasCookiesFile = Boolean(loaded?.yt_dlp_cookies_file)
 
   if (sessionLoading || (isAdmin && configLoading)) {
@@ -332,36 +334,39 @@ export function SettingsPage() {
             Nutrition lookup
           </CardTitle>
           <CardDescription>
-            Optional live USDA FoodData Central search when an ingredient is missing from the local table.
+            Ingredients are costed from a built-in table first. Anything it does not
+            recognise can be looked up live in Open Food Facts.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Field
-            label="USDA FoodData Central API Key"
-            hint={
-              <>
-                Leave blank to keep using the local table. If this field is empty, the{' '}
-                <code className="font-mono text-xs">USDA_FDC_API_KEY</code> environment variable is used instead. Get a free key at{' '}
+          <div className="flex items-center gap-3">
+            <Switch
+              id="nutrition_lookup_enabled"
+              checked={nutritionLookupEnabled}
+              onCheckedChange={checked =>
+                set('nutrition_lookup_enabled', checked ? 'true' : 'false')
+              }
+            />
+            <div>
+              <Label htmlFor="nutrition_lookup_enabled">
+                Look unknown ingredients up in Open Food Facts
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                An{' '}
                 <a
-                  href="https://fdc.nal.usda.gov/api-key-signup.html"
+                  href="https://world.openfoodfacts.org/"
                   target="_blank"
                   rel="noreferrer"
                   className="underline underline-offset-2 hover:text-foreground"
                 >
-                  fdc.nal.usda.gov
-                </a>
-                . Stored in this instance&apos;s database, never in source code.
-              </>
-            }
-          >
-            <Input
-              type="password"
-              placeholder="USDA API key"
-              autoComplete="off"
-              value={get('usda_fdc_api_key')}
-              onChange={e => set('usda_fdc_api_key', e.target.value)}
-            />
-          </Field>
+                  open food database
+                </a>{' '}
+                with worldwide coverage. No API key or account needed. Turn this
+                off for a fully offline instance; the built-in table keeps
+                working either way.
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

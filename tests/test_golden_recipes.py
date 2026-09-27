@@ -5,10 +5,12 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import nutrition  # noqa: E402
 from chef import (  # noqa: E402
     RecipeEditError,
     apply_confirmed_recipe,
@@ -79,6 +81,19 @@ class GoldenFixtureTests(unittest.TestCase):
 
 
 class ChefPacketTests(unittest.TestCase):
+    """No live downloads means no Open Food Facts either.
+
+    These fixtures are about what Chef does with a recipe, so the nutrition
+    fallback stays off: leaving it on would make them depend on a third-party
+    service being reachable and on what it happens to hold today.
+    """
+
+    def setUp(self):
+        patcher = mock.patch.object(
+            nutrition, "_lookup_enabled", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_payload_puts_ocr_in_on_screen_text(self):
         payload = build_recipe_user_payload(
             source_url="https://example.com/v",

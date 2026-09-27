@@ -1,14 +1,16 @@
 """Deterministic per-serving nutrition from ingredients.
 
-Values are rounded USDA FoodData Central / SR Legacy figures per 100 g (public
-data). Optional USDA FDC search is used only when a key is set in Settings
-(usda_fdc_api_key) or USDA_FDC_API_KEY in the environment — the key is never
-hardcoded.
+The local table holds rounded per-100 g figures for the ~180 foods that show up
+in practice. Anything it does not know is looked up live in Open Food Facts,
+which needs no API key and covers far more of the world than a US government
+dataset does. Turn the network lookup off in Settings to use the table alone.
 """
 
 from __future__ import annotations
 
-import os
+import statistics
+import threading
+import time
 from typing import Any
 
 from helpers import extract_servings, setup_logger
@@ -217,7 +219,23 @@ for _canon, _meta in _FOODS.items():
     for _alias in _meta.get("aliases") or []:
         _ALIAS_TO_CANON[_alias.casefold()] = _canon
 
-_USDA_SEARCH = "https://api.nal.usda.gov/fdc/v1/foods/search"
+# Open Food Facts: an open, collaborative food database with worldwide coverage
+# and no API key. https://world.openfoodfacts.org/
+#
+# This is the Search-a-licious service rather than the older cgi/search.pl on
+# world.openfoodfacts.org. The legacy CGI answers 503 under very little load and
+# handles non-Latin queries badly; this one returns Hebrew and Arabic matches
+# and stays up.
+_OFF_SEARCH = "https://search.openfoodfacts.org/search"
+# OFF asks every client to identify itself; anonymous traffic gets throttled.
+_OFF_USER_AGENT = "Pick-a-Recipe/1.0 (https://github.com/pickeld/pick-a-recipe)"
+# Products are brand entries, so the top hit alone is noisy. Taking the median
+# of a handful of popular matches is far closer to the generic ingredient.
+_OFF_PAGE_SIZE = 5
+_OFF_TIMEOUT = 8
+# Nothing edible exceeds pure fat. A higher figure means the product's per-100 g
+# values are wrong (a common data-entry slip on a collaborative database).
+_OFF_MAX_KCAL_PER_100G = 902
 
 
 def _fold_food(name: str) -> str:
@@ -274,60 +292,186 @@ def _zero() -> _N:
     return (0, 0, 0, 0, 0, 0, 0, 0)
 
 
-def _usda_api_key() -> str:
-    """Settings key first, then USDA_FDC_API_KEY in the environment. Never logged."""
+def _lookup_enabled() -> bool:
+    """Whether Settings allows the live Open Food Facts lookup."""
     try:
         from config import config
-        return (config.USDA_FDC_API_KEY or "").strip()
+        return bool(config.NUTRITION_LOOKUP_ENABLED)
     except Exception:
-        return (os.environ.get("USDA_FDC_API_KEY") or "").strip()
+        return True
 
 
-def _search_usda(food: str) -> _N | None:
-    """Best-effort FDC lookup. Swallows errors; never logs the API key."""
-    key = _usda_api_key()
-    if not key:
+class _SearchBudget:
+    """Client-side cap on outbound searches, shared across worker threads.
+
+    Open Food Facts asks for no more than 10 searches a minute. Over that we
+    skip the lookup rather than sleep: nutrition is an estimate layered on top
+    of the local table, and stalling a recipe extraction to wait for it would
+    be the wrong trade.
+    """
+
+    def __init__(self, limit: int = 10, window: float = 60.0):
+        self._limit = limit
+        self._window = window
+        self._hits: list[float] = []
+        self._lock = threading.Lock()
+
+    def take(self) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            self._hits = [t for t in self._hits if now - t < self._window]
+            if len(self._hits) >= self._limit:
+                return False
+            self._hits.append(now)
+            return True
+
+
+_off_budget = _SearchBudget()
+# Ingredients repeat within and across recipes; a miss is worth caching too, so
+# an unknown food costs one request per process rather than one per recipe.
+_off_cache: dict[str, _N | None] = {}
+_off_cache_lock = threading.Lock()
+
+
+def _off_float(nutriments: dict, key: str) -> float | None:
+    """One per-100 g nutriment as a float, or None when absent or unparseable."""
+    try:
+        value = nutriments[key]
+    except KeyError:
         return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _off_product_nutrients(nutriments: dict) -> _N | None:
+    """One OFF product's per-100 g figures, in this module's nutrient order.
+
+    Missing values come back as None rather than 0 so the median across
+    products is taken over the products that actually reported a nutrient.
+    """
+    kcal = _off_float(nutriments, "energy-kcal_100g")
+    if kcal is None:
+        kj = _off_float(nutriments, "energy_100g")
+        kcal = kj / 4.184 if kj is not None else None
+    if kcal is None or kcal > _OFF_MAX_KCAL_PER_100G:
+        return None
+
+    sodium_g = _off_float(nutriments, "sodium_100g")
+    if sodium_g is None:
+        salt_g = _off_float(nutriments, "salt_100g")
+        # Salt is sodium chloride: 1 g of salt carries 0.4 g of sodium.
+        sodium_g = salt_g * 0.4 if salt_g is not None else None
+    cholesterol_g = _off_float(nutriments, "cholesterol_100g")
+
+    return (
+        kcal,
+        _off_float(nutriments, "proteins_100g"),
+        _off_float(nutriments, "fat_100g"),
+        _off_float(nutriments, "carbohydrates_100g"),
+        _off_float(nutriments, "fiber_100g"),
+        _off_float(nutriments, "sugars_100g"),
+        sodium_g * 1000 if sodium_g is not None else None,
+        cholesterol_g * 1000 if cholesterol_g is not None else None,
+    )  # type: ignore[return-value]
+
+
+def _name_is_relevant(product_name: Any, folded_query: str) -> bool:
+    """True when a product is plausibly the ingredient we asked about.
+
+    The search is fuzzy: it answers a nonsense query with real products rather
+    than with nothing, so "mystery spice blend" comes back with a spice blend
+    and a number we would otherwise believe. Requiring one name to contain the
+    other keeps "chicken breast fillets" matching a product called "Chicken
+    breast" while throwing out a merely word-overlapping hit. Leaving an
+    ingredient out of the estimate is much cheaper than inventing it.
+    """
+    folded_name = _fold_food(str(product_name or ""))
+    if len(folded_name) < 3 or not folded_query:
+        return False
+    return folded_query in folded_name or folded_name in folded_query
+
+
+def _median_by_nutrient(products: list[_N]) -> _N:
+    """Per-nutrient median across products, ignoring the ones that omitted it."""
+    out = []
+    for index in range(8):
+        reported = [p[index] for p in products if p[index] is not None]
+        out.append(statistics.median(reported) if reported else 0.0)
+    return tuple(out)  # type: ignore[return-value]
+
+
+def _search_open_food_facts(food: str) -> _N | None:
+    """Best-effort Open Food Facts lookup. Swallows every error."""
+    if not _lookup_enabled():
+        return None
+
+    key = _fold_food(food)
+    with _off_cache_lock:
+        if key in _off_cache:
+            return _off_cache[key]
+
+    if not _off_budget.take():
+        logger.info("[Nutrition] Open Food Facts budget spent; skipping %r", food)
+        return None
+
+    result: _N | None = None
     try:
         from helpers import create_http_session
         from url_safety import safe_get
 
-        session = create_http_session()
         resp = safe_get(
-            session,
-            _USDA_SEARCH,
-            params={"query": food, "pageSize": 1, "api_key": key},
-            timeout=8,
+            create_http_session(),
+            _OFF_SEARCH,
+            params={
+                "q": food,
+                "page_size": _OFF_PAGE_SIZE,
+                # Only what we cost the ingredient from: the full product
+                # record is large and most of it is packaging metadata.
+                "fields": "product_name,nutriments",
+            },
+            headers={"User-Agent": _OFF_USER_AGENT},
+            timeout=_OFF_TIMEOUT,
         )
         resp.raise_for_status()
-        foods = (resp.json() or {}).get("foods") or []
-        if not foods:
-            return None
-        by_id = {
-            int(n.get("nutrientId") or 0): float(n.get("value") or 0)
-            for n in foods[0].get("foodNutrients") or []
-            if n.get("nutrientId")
-        }
-        return (
-            by_id.get(1008, 0),
-            by_id.get(1003, 0),
-            by_id.get(1004, 0),
-            by_id.get(1005, 0),
-            by_id.get(1079, 0),
-            by_id.get(2000, 0),
-            by_id.get(1093, 0),
-            by_id.get(1253, 0),
-        )
+        hits = (resp.json() or {}).get("hits") or []
+        usable = []
+        for product in hits:
+            if not isinstance(product, dict):
+                continue
+            nutriments = product.get("nutriments")
+            if not isinstance(nutriments, dict):
+                continue
+            if not _name_is_relevant(product.get("product_name"), key):
+                continue
+            parsed = _off_product_nutrients(nutriments)
+            if parsed is not None:
+                usable.append(parsed)
+        if usable:
+            result = _median_by_nutrient(usable)
+            logger.info(
+                "[Nutrition] Open Food Facts matched %r from %d product(s)",
+                food, len(usable),
+            )
     except Exception as exc:
-        logger.info("[Nutrition] USDA lookup skipped for %r: %s", food, type(exc).__name__)
+        logger.info(
+            "[Nutrition] Open Food Facts lookup skipped for %r: %s",
+            food, type(exc).__name__,
+        )
         return None
+
+    with _off_cache_lock:
+        _off_cache[key] = result
+    return result
 
 
 def _nutrients_for(name: str) -> tuple[str, dict[str, Any]] | None:
     canon = match_food(name)
     if canon:
         return canon, _FOODS[canon]
-    remote = _search_usda(name)
+    remote = _search_open_food_facts(name)
     if remote is None:
         return None
     return name, {"n": remote, "density": 1.0}

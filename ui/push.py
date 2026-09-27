@@ -86,8 +86,8 @@ def _generate_keypair() -> tuple[str, str]:
 def _stored_keys() -> tuple[str, str]:
     """Current VAPID pair: environment first, then the config table.
 
-    Environment wins here, the opposite of settings-backed values like the USDA
-    key. Nobody types a VAPID key into the settings UI -- the stored pair is
+    Environment wins here, the opposite of the settings-backed API keys.
+    Nobody types a VAPID key into the settings UI -- the stored pair is
     self-generated -- so an operator who sets the environment explicitly is
     making the more deliberate statement of the two.
     """

@@ -457,7 +457,7 @@ class Chef:
         looked = lookup_recipe_nutrition(recipe)
         if looked:
             recipe["nutrition"] = looked
-            logger.info("[Chef] Nutrition from local/USDA table: %s", looked)
+            logger.info("[Chef] Nutrition estimated from ingredients: %s", looked)
         else:
             recipe.pop("nutrition", None)
 
@@ -507,7 +507,7 @@ class Chef:
         looked = lookup_recipe_nutrition(recipe)
         if looked:
             recipe["nutrition"] = looked
-            logger.info("[Chef] Nutrition from local/USDA table after yield: %s", looked)
+            logger.info("[Chef] Nutrition estimated from ingredients after yield: %s", looked)
         else:
             recipe.pop("nutrition", None)
         return recipe

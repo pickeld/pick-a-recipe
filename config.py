@@ -92,7 +92,7 @@ DEFAULT_CONFIG = {
     "whisper_model": "small",
     "confirm_before_upload": "true",
     "hf_token": "",
-    "usda_fdc_api_key": "",
+    "nutrition_lookup_enabled": "true",
     "yt_dlp_cookies_file": "",
     "yt_dlp_cookies_browser": "",
     "max_concurrent_jobs": "3",
@@ -279,16 +279,14 @@ class Config:
         return self._get('hf_token', DEFAULT_CONFIG['hf_token'])
 
     @property
-    def USDA_FDC_API_KEY(self) -> str:
-        """USDA FoodData Central key from Settings, else USDA_FDC_API_KEY env.
+    def NUTRITION_LOOKUP_ENABLED(self) -> bool:
+        """Whether to ask Open Food Facts about ingredients the table misses.
 
-        Never hardcoded. Empty Settings falls through to the environment so
-        Docker operators can keep using env-only configuration.
+        On by default: the lookup needs no API key and no account, so the only
+        cost is an outbound request. Turn it off for a fully offline instance.
         """
-        stored = self._get('usda_fdc_api_key', DEFAULT_CONFIG['usda_fdc_api_key'])
-        if stored:
-            return stored
-        return (os.environ.get('USDA_FDC_API_KEY') or '').strip()
+        return _truthy(self._get('nutrition_lookup_enabled',
+                                 DEFAULT_CONFIG['nutrition_lookup_enabled']))
 
     @property
     def YT_DLP_COOKIES_FILE(self) -> str:
