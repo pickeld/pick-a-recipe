@@ -27,7 +27,7 @@ The app then reads `GET /api/auth/status` and offers only what that server has:
 | Server state | What the app shows |
 |--------------|--------------------|
 | `AUTH_MODE=local` | Username and password, posted to `/api/mobile/auth/login` |
-| `AUTH_MODE=authentik` | A button that opens Authentik in the system browser |
+| `AUTH_MODE=oidc` | A button that opens the identity provider in the system browser |
 | No account yet | A prompt to finish setup in a browser, and a re-check button |
 | `JWT_SECRET_KEY` unset | An explanation that app sign-in is switched off |
 
@@ -71,35 +71,36 @@ applies the *same* throttle ladder as the web form, keyed on (IP, username) — 
 the app endpoint is not a way around the form's rate limit, or the reverse.
 Wrong password and unknown account are indistinguishable in the response.
 
-The endpoint is refused under `AUTH_MODE=authentik`: there, group membership
+The endpoint is refused under `AUTH_MODE=oidc`: there, group membership
 governs access rather than any password an account happens to carry, so
 honouring one would be a way around single sign-on.
 
-## How Authentik sign-in works
+## How single sign-on works
 
-The app never handles the OIDC client secret, and no credentials are entered
-inside the app.
+Any OpenID Connect provider works — Authentik, Authelia, Keycloak, Pocket ID
+and the rest. The app never handles the OIDC client secret, and no credentials
+are entered inside the app.
 
 1. The app asks the server for an authorization URL:
    `GET /api/mobile/auth/login-url?redirect=par://auth/callback`. The server
    mints a single-use nonce, uses it as the OAuth `state`, and returns the
-   Authentik URL.
+   provider's authorization URL.
 2. The URL opens in the **system browser** — not a webview — so an existing
-   Authentik session cookie is reused and credential entry stays outside the
+   provider session cookie is reused and credential entry stays outside the
    app.
-3. Authentik redirects to the server's own callback,
+3. The provider redirects to the server's own callback,
    `https<server>/auth/callback`. The server recognises the nonce as a mobile
    sign-in, exchanges the code for tokens using its confidential client
-   credentials, and checks the user's Authentik group.
+   credentials, and checks the user's group membership.
 4. The server redirects to `par://auth/callback#access_token=…&refresh_token=…`.
    Tokens ride in the URL **fragment**, which browsers never send to servers,
    keeping them out of access logs and `Referer` headers.
 5. The app receives the deep link, stores the pair in the platform keystore,
    and confirms it with `GET /api/mobile/me` before showing a signed-in UI.
 
-Because the redirect URI registered with Authentik is the server's own
-callback, **no Authentik configuration change is needed** for the app — the
-`par://` scheme is only ever seen by the device.
+Because the redirect URI registered with the provider is the server's own
+callback, **no identity-provider configuration change is needed** for the app —
+the `par://` scheme is only ever seen by the device.
 
 ### Tokens
 

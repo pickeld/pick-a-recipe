@@ -20,22 +20,31 @@ class ServerAuthStatus {
     required this.ssoEnabled,
     required this.setupRequired,
     required this.mobileAuthEnabled,
+    this.ssoProviderName = 'SSO',
   });
 
   factory ServerAuthStatus.fromJson(Map<String, dynamic> json) {
+    final String providerName =
+        (json['sso_provider_name'] as String? ?? '').trim();
     return ServerAuthStatus(
       localAuthEnabled: json['local_auth_enabled'] as bool? ?? false,
       ssoEnabled: json['sso_enabled'] as bool? ?? false,
       setupRequired: json['setup_required'] as bool? ?? false,
       mobileAuthEnabled: json['mobile_auth_enabled'] as bool? ?? false,
+      // Servers older than the OIDC rename do not send it; 'SSO' reads
+      // correctly whichever provider is behind it.
+      ssoProviderName: providerName.isEmpty ? 'SSO' : providerName,
     );
   }
 
   /// Username and password accounts held by the instance itself.
   final bool localAuthEnabled;
 
-  /// Authentik, reached through the system browser.
+  /// An OpenID Connect provider, reached through the system browser.
   final bool ssoEnabled;
+
+  /// What this server calls its identity provider, for the sign-in button.
+  final String ssoProviderName;
 
   /// No account exists yet; nobody can sign in until one is made in a browser.
   final bool setupRequired;
@@ -60,7 +69,7 @@ class AuthRepository {
 
   final Dio _dio;
 
-  /// Asks the backend for an Authentik authorization URL bound to a
+  /// Asks the backend for an OIDC authorization URL bound to a
   /// single-use nonce. The nonce is minted and validated server-side, so the
   /// app never handles the OIDC client secret.
   Future<Uri> loginUrl({required String redirectUri}) async {

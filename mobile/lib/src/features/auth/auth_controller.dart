@@ -36,7 +36,7 @@ class AuthController extends Notifier<AuthState> {
 
   /// Signs in with an account held by the instance itself.
   ///
-  /// Unlike the Authentik path this completes in one call, with no browser and
+  /// Unlike the single sign-on path this completes in one call, with no browser and
   /// no deep link: the server hands back the token pair directly.
   Future<void> signInWithPassword({
     required String username,
@@ -70,7 +70,7 @@ class AuthController extends Notifier<AuthState> {
     }
   }
 
-  /// Opens the system browser at Authentik. Control returns to the app through
+  /// Opens the system browser at the identity provider. Control returns to the app through
   /// the deep link handled by [completeSignIn].
   Future<void> signIn() async {
     if (state.isBusy) return;
@@ -78,7 +78,7 @@ class AuthController extends Notifier<AuthState> {
 
     try {
       final Uri url = await _repository.loginUrl(redirectUri: kAuthCallbackUri);
-      // An external browser, not a webview: it carries any existing Authentik
+      // An external browser, not a webview: it carries any existing provider
       // session cookie and keeps app code away from the credential entry.
       final bool launched = await ref.read(urlLauncherProvider)(url);
       if (!launched) {

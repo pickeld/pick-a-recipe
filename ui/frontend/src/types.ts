@@ -295,8 +295,8 @@ export interface SettingsExport {
 export interface SessionUser {
   user: string
   is_admin: boolean
-  auth_mode?: 'local' | 'authentik'
-  /** False under Authentik, where the IdP owns accounts and passwords. */
+  auth_mode?: 'local' | 'oidc'
+  /** False under OIDC, where the IdP owns accounts and passwords. */
   local_auth_enabled?: boolean
   /** Always false now; kept so an older cached bundle still parses a response. */
   auth_disabled?: boolean

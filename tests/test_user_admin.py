@@ -480,7 +480,7 @@ class TestChangePasswordThrottling(unittest.TestCase):
         self.assertIn(429, self.res['statuses'])
 
 
-class TestAuthentikModeRefusesUserAdmin(unittest.TestCase):
+class TestOidcModeRefusesUserAdmin(unittest.TestCase):
     """Under SSO the identity provider owns accounts, so local CRUD is a lie.
 
     Creating an account here could not sign in (password login is refused), and
@@ -519,8 +519,8 @@ class TestAuthentikModeRefusesUserAdmin(unittest.TestCase):
                 own_password_status=own_password.status_code,
                 boss_survives=database.get_user('boss') is not None,
             )
-        """), AUTH_MODE='authentik',
-            AUTHENTIK_CLIENT_ID='id', AUTHENTIK_CLIENT_SECRET='secret'))
+        """), AUTH_MODE='oidc', OIDC_ISSUER_URL='https://idp.example.test',
+            OIDC_CLIENT_ID='id', OIDC_CLIENT_SECRET='secret'))
 
     def test_listing_still_works_for_visibility(self):
         self.assertEqual(self.res['listed_status'], 200)
