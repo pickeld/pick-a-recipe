@@ -27,10 +27,10 @@ prompts:
     name: _get_visual_text_prompt
     file: transcriber.py
     used_by: transcriber.py::Transcriber.extract_visual_text
-  - id: llm_providers/base.py::LLMImageSelector::_get_selection_prompt#0
-    name: _get_selection_prompt
-    file: llm_providers/base.py
-    used_by: llm_providers.openai.OpenAIImageSelector.select_best_frame
+  - id: frame_selector.py::<module>::selection_prompt#0
+    name: selection_prompt
+    file: frame_selector.py
+    used_by: frame_selector.py::select_best_frame
 
 guardrails:
   - id: recipe_schema.py::<module>::ensure_is_recipe#0

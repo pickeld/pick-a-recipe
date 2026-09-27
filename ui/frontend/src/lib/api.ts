@@ -220,6 +220,19 @@ export const api = {
   // ===== Config =====
   getConfig: () => request<import('@/types').AppConfig>('/api/config'),
 
+  // ===== AI providers =====
+  aiProviders: () =>
+    request<{
+      providers: import('@/types').AiProvider[]
+      api_types: Record<string, import('@/types').ApiTypeSpec>
+      compatible_catalogs: Record<string, string>
+    }>('/api/ai/providers'),
+
+  modelCatalog: (catalog: string) =>
+    request<{ models: { id: string; name: string; released: string }[] }>(
+      `/api/ai/model-catalog?catalog=${encodeURIComponent(catalog)}`,
+    ),
+
   saveConfig: (patch: Partial<import('@/types').AppConfig>) =>
     request<{ status: string; saved_keys: string[] }>('/api/config', {
       method: 'POST',

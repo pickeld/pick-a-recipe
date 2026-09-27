@@ -8,8 +8,8 @@ actionable messages instead of letting them blow up mid-extraction:
      (YouTube/TikTok/Instagram), so downloads start failing. We verify yt-dlp
      and its runtime deps (ffmpeg, deno) are present and report the version.
   2. LLM model drift - the configured provider model gets retired/deprecated
-     and 404s (see PIC-34). We verify a provider + key is configured and, when
-     possible, that the configured model still exists.
+     and 404s (see PIC-34). We verify the provider chosen for extraction is
+     usable and, when possible, that its model still exists.
 
 Checks are intentionally non-fatal: they log actionable warnings and expose a
 machine-readable result (used by /api/health and the container HEALTHCHECK) so
@@ -97,82 +97,76 @@ def check_ytdlp(probe_network: bool = False) -> dict:
 
 
 def check_llm(probe_network: bool = False) -> dict:
-    """Check that an LLM provider + key + model is configured (and reachable).
+    """Check that an AI provider is configured for extraction (and reachable).
 
     Args:
         probe_network: if True, verify the configured model actually exists by
             listing the provider's models. Off by default.
     """
+    from ai_providers import (
+        ProviderConfigError, describe, selected_provider, validate,
+    )
+
     config.reload()
-    provider = config.LLM_PROVIDER
-
-    if provider == "openai":
-        api_key = config.OPENAI_API_KEY
-        model = config.OPENAI_MODEL
-    elif provider == "gemini":
-        api_key = config.GEMINI_API_KEY
-        model = config.GEMINI_MODEL
-    elif provider == "openrouter":
-        api_key = config.OPENROUTER_API_KEY
-        model = config.OPENROUTER_MODEL
-    else:
+    try:
+        provider = selected_provider()
+    except ProviderConfigError as exc:
         return _result(
-            "llm", False,
-            f"Unknown LLM provider configured: '{provider}'",
-            "Set provider to 'openai', 'gemini', or 'openrouter' in Settings.",
+            "llm", False, str(exc),
+            "Add a provider under Settings -> AI Providers.",
         )
 
-    if not api_key:
+    try:
+        validate(provider)
+    except ProviderConfigError as exc:
         return _result(
-            "llm", False,
-            f"No API key configured for provider '{provider}'",
-            f"Add your {provider} API key in Settings.",
+            "llm", False, str(exc),
+            "Fix this provider under Settings -> AI Providers.",
         )
 
-    fallbacks = candidate_models(provider, model)
+    fallbacks = candidate_models(provider.api_type, provider.model)
 
     if probe_network:
         try:
-            available = _list_available_models(provider, api_key)
+            available = _list_available_models(provider)
         except Exception as exc:
             return _result(
                 "llm", False,
-                f"Could not reach {provider} to verify model '{model}': {exc}",
-                f"Check the {provider} API key and network connectivity.",
+                f"Could not reach {provider.label} to verify model "
+                f"'{provider.model}': {exc}",
+                f"Check the {provider.label} API key, base URL and network "
+                f"connectivity.",
             )
         # Provider model ids are sometimes namespaced (e.g. 'models/gemini-...').
-        if available and not any(model in m or m in model for m in available):
+        if available and not any(
+            provider.model in m or m in provider.model for m in available
+        ):
             return _result(
                 "llm", False,
-                f"Configured {provider} model '{model}' is not in the provider's "
-                f"available model list - it may be retired/deprecated.",
-                f"Update the {provider} model in Settings. The app will fall back "
-                f"to {fallbacks[1:]} automatically at call time, but you should "
-                f"set a supported model.",
+                f"Configured model '{provider.model}' is not in "
+                f"{provider.label}'s available model list - it may be "
+                f"retired or not served there.",
+                f"Update the model for {provider.label} in Settings."
+                + (f" The app will fall back to {fallbacks[1:]} automatically "
+                   f"at call time, but you should set a supported model."
+                   if len(fallbacks) > 1 else ""),
             )
 
-    return _result(
-        "llm", True,
-        f"Provider '{provider}' configured with model '{model}' "
-        f"(fallback chain: {fallbacks})",
-    )
+    chain = f" (fallback chain: {fallbacks})" if len(fallbacks) > 1 else ""
+    return _result("llm", True, f"Extraction uses {describe(provider)}{chain}")
 
 
-def _list_available_models(provider: str, api_key: str) -> list[str]:
-    """Return available model ids for the provider (best-effort)."""
-    if provider == "openai":
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        return [m.id for m in client.models.list().data]
-    if provider == "gemini":
-        from google import genai
-        client = genai.Client(api_key=api_key)
+def _list_available_models(provider) -> list[str]:
+    """Return available model ids for a provider (best-effort)."""
+    from ai_providers import ANTHROPIC, GEMINI, AiSession
+
+    client = AiSession(provider).client
+    if provider.api_type == GEMINI:
         return [getattr(m, "name", "") for m in client.models.list()]
-    if provider == "openrouter":
-        from llm_openrouter import make_openrouter_client
-        client = make_openrouter_client()
+    if provider.api_type == ANTHROPIC:
         return [m.id for m in client.models.list().data]
-    return []
+    # Both OpenAI dialects expose GET /models.
+    return [m.id for m in client.models.list().data]
 
 
 def run_health_checks(probe_network: bool = False) -> dict:

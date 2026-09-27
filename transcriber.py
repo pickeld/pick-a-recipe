@@ -4,14 +4,13 @@ import sys
 import time
 from faster_whisper import WhisperModel
 
+from ai_providers import AiSession
 from config import config
 from helpers import setup_logger
-from llm_resilience import call_with_model_fallback
 from recipe_schema import (
     VISUAL_JSON_SCHEMA,
     VisualTextExtraction,
     parse_visual_text,
-    to_gemini_json_schema,
 )
 
 logger = setup_logger(__name__)
@@ -176,6 +175,10 @@ class Transcriber:
     def transcribe(self, language: str | None = None) -> str:
         """Return the full transcription as plain text.
 
+        Runs Whisper on this machine unless Settings names a provider to
+        transcribe through. A provider that fails falls back to the local
+        model rather than losing the audio entirely.
+
         Args:
             language: Language code for transcription (e.g., 'he', 'en').
                      Defaults to config.TARGET_LANGUAGE if not specified.
@@ -187,194 +190,81 @@ class Transcriber:
             )
             return ""
 
-        self._load_model()
-
-        # Use target language from config if not specified
         lang = language or config.TARGET_LANGUAGE
 
-        segments, info = self.model.transcribe(
-            audio_path, language=lang)
-        
-        text_parts = []
-        for seg in segments:
-            text_parts.append(seg.text.strip())
-        
-        return " ".join(text_parts).strip()
+        remote = self._transcribe_with_provider(audio_path, lang)
+        if remote is not None:
+            return remote
+
+        return self._transcribe_locally(audio_path, lang)
+
+    def _transcribe_with_provider(self, audio_path: str, lang: str) -> str | None:
+        """Transcription from the configured provider, or None to use Whisper."""
+        from ai_providers import transcribe_audio, transcription_provider
+
+        provider = transcription_provider()
+        if provider is None:
+            return None
+        try:
+            logger.info(
+                "[Transcribe] Transcribing through %s (%s)",
+                provider.label, config.TRANSCRIPTION_MODEL,
+            )
+            return transcribe_audio(
+                provider, audio_path,
+                model=config.TRANSCRIPTION_MODEL, language=lang,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Transcribe] %s could not transcribe (%s); falling back to "
+                "local Whisper.", provider.label, exc,
+            )
+            return None
+
+    def _transcribe_locally(self, audio_path: str, lang: str) -> str:
+        """faster-whisper on this machine, which needs no API and no network."""
+        self._load_model()
+        segments, _info = self.model.transcribe(audio_path, language=lang)
+        return " ".join(seg.text.strip() for seg in segments).strip()
 
     def extract_visual_text(self) -> str:
-        """
-        Extract on-screen text from video using LLM vision capabilities.
-        Supports both Gemini (direct video upload) and OpenAI (frame extraction).
+        """Extract on-screen text from the video using the configured provider.
+
+        Providers that can read a video directly (Gemini) get the file; the
+        rest are handed evenly spaced frames. Which of the two happens is the
+        only thing this method still decides - every dialect difference lives
+        in ai_providers.
 
         Returns:
             Extracted text from video as a single string.
         """
-        if config.LLM_PROVIDER == "gemini":
-            return self._extract_visual_text_gemini()
-        elif config.LLM_PROVIDER == "openai":
-            return self._extract_visual_text_openai()
-        elif config.LLM_PROVIDER == "openrouter":
-            return self._extract_visual_text_openrouter()
-        else:
-            raise ValueError(
-                f"Visual text extraction not supported for provider: {config.LLM_PROVIDER}")
-
-    def _extract_visual_text_gemini(self) -> str:
-        """Extract visual text using Gemini's direct video understanding."""
-        from google import genai
-        from google.genai import types
-        import time
-
-        client = genai.Client(api_key=config.GEMINI_API_KEY)
-
-        # Upload the video file to Gemini
-        video_file = client.files.upload(file=self.video_path)
-
-        # Wait for the video to be processed
-        while video_file.state and video_file.state.name == "PROCESSING":
-            time.sleep(2)
-            video_file = client.files.get(name=video_file.name or "")
-
-        if video_file.state and video_file.state.name == "FAILED":
-            raise RuntimeError(f"Video processing failed: {video_file.state}")
-
+        session = AiSession()
         prompt = self._get_visual_text_prompt()
 
-        def _call(model: str):
-            return client.models.generate_content(
-                model=model,
-                contents=[
-                    types.Content(
-                        role="user",
-                        parts=[
-                            types.Part.from_uri(
-                                file_uri=video_file.uri or "",
-                                mime_type=video_file.mime_type or "video/mp4"
-                            ),
-                            types.Part.from_text(text=prompt),
-                        ],
-                    ),
-                ],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=to_gemini_json_schema(VisualTextExtraction),
-                ),
+        if session.supports_video_upload:
+            raw = session.complete_json_with_video(
+                prompt,
+                self.video_path,
+                schema_name="visual_text",
+                json_schema=VISUAL_JSON_SCHEMA,
+                schema_model=VisualTextExtraction,
             )
+            return _plain_visual_text(raw)
 
-        response, _ = call_with_model_fallback("gemini", config.GEMINI_MODEL, _call)
-        return _plain_visual_text(response.text or "")
-
-    def _extract_visual_text_openai(self) -> str:
-        """Extract visual text using OpenAI's vision API with extracted frames."""
-        import base64
-        from openai import OpenAI
-
-        client = OpenAI(api_key=config.OPENAI_API_KEY)
-
-        # Extract frames from video
         frames = self._extract_frames(num_frames=8)
         if not frames:
             raise RuntimeError("No frames could be extracted from video")
-
-        # Encode frames as base64
-        image_contents = []
-        for frame_path in frames:
-            with open(frame_path, "rb") as f:
-                b64_image = base64.standard_b64encode(f.read()).decode("utf-8")
-            image_contents.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{b64_image}",
-                    "detail": "high"
-                }
-            })
-
-        prompt = self._get_visual_text_prompt()
-
-        def _call(model: str):
-            return client.responses.create(
-                model=model,
-                input=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            *image_contents
-                        ]
-                    }
-                ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "visual_text",
-                        "strict": True,
-                        "schema": VISUAL_JSON_SCHEMA,
-                    }
-                },
-            )
-
-        response, _ = call_with_model_fallback("openai", config.OPENAI_MODEL, _call)
-        return _plain_visual_text(response.output_text or "")
-
-    def _extract_visual_text_openrouter(self) -> str:
-        """Extract visual text via an OpenRouter vision model using extracted frames.
-
-        OpenRouter exposes the OpenAI Chat Completions dialect, so this mirrors
-        the OpenAI frame-based path but calls ``chat.completions.create`` with a
-        ``response_format`` structured-output request.
-        """
-        import base64
-        from llm_openrouter import make_openrouter_client
-
-        client = make_openrouter_client()
-
-        # Extract frames from video
-        frames = self._extract_frames(num_frames=8)
-        if not frames:
-            raise RuntimeError("No frames could be extracted from video")
-
-        # Encode frames as base64
-        image_contents = []
-        for frame_path in frames:
-            with open(frame_path, "rb") as f:
-                b64_image = base64.standard_b64encode(f.read()).decode("utf-8")
-            image_contents.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{b64_image}",
-                    "detail": "high"
-                }
-            })
-
-        prompt = self._get_visual_text_prompt()
-
-        def _call(model: str):
-            return client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            *image_contents
-                        ]
-                    }
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "visual_text",
-                        "strict": True,
-                        "schema": VISUAL_JSON_SCHEMA,
-                    }
-                },
-            )
-
-        response, _ = call_with_model_fallback(
-            "openrouter", config.OPENROUTER_MODEL, _call
+        raw = session.complete_json_with_images(
+            prompt,
+            frames,
+            schema_name="visual_text",
+            json_schema=VISUAL_JSON_SCHEMA,
+            schema_model=VisualTextExtraction,
+            # On-screen text is small and often stylised, so it needs the
+            # detailed read that frame selection does not.
+            detail="high",
         )
-        content = response.choices[0].message.content or ""
-        return _plain_visual_text(content)
+        return _plain_visual_text(raw)
 
     def _extract_frames(self, num_frames: int = 8) -> list[str]:
         """Extract evenly-spaced frames from video using ffmpeg."""

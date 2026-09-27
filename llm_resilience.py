@@ -19,13 +19,19 @@ from helpers import setup_logger
 logger = setup_logger(__name__)
 
 
-# Per-provider fallback chains, most-preferred first.
+# Fallback chains per API dialect, most-preferred first. Keyed by dialect and
+# not by configured provider: the model names have to be ones the endpoint will
+# actually recognise, and only the first-party APIs have a knowable set.
+#
+# "openai-compatible" deliberately has none. Behind that dialect could be
+# OpenRouter, Groq, Together or a local Ollama, and a name that works on one is
+# a 404 on the next - so a failed model falls through to a clear error instead
+# of a second, equally wrong guess.
 FALLBACK_MODELS = {
     "openai": ["gpt-5-mini-2025-08-07", "gpt-4o-mini", "gpt-4o"],
     "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
-    # OpenRouter model slugs are namespaced (vendor/model). These vision-capable
-    # defaults back up whatever slug the user configured in Settings.
-    "openrouter": ["openai/gpt-4o-mini", "google/gemini-2.5-flash"],
+    "anthropic": ["claude-sonnet-4-5", "claude-haiku-4-5"],
+    "openai-compatible": [],
 }
 
 _MODEL_GONE_MARKERS = (
@@ -101,22 +107,6 @@ def candidate_models(provider: str, configured_model: str) -> list[str]:
     return ordered
 
 
-def _persist_working_model(provider: str, model: str) -> None:
-    """Best-effort: remember the model that worked so we stop hitting the 404."""
-    try:
-        from config import config, set_config_value
-        key = f"{provider}_model"
-        set_config_value(key, model)
-        config.reload()
-        logger.info(
-            "Persisted working %s model '%s' to config (was failing over from a "
-            "previously configured model).",
-            provider, model,
-        )
-    except Exception as exc:
-        logger.warning("Could not persist working model '%s': %s", model, exc)
-
-
 def _call_with_transient_retry(call, model: str, provider: str):
     """Call call(model), retrying on transient errors with back-off.
 
@@ -150,7 +140,8 @@ def _call_with_transient_retry(call, model: str, provider: str):
     raise _TransientExhausted(str(last_exc)) from last_exc
 
 
-def call_with_model_fallback(provider, configured_model, call, *, persist=True):
+def call_with_model_fallback(provider, configured_model, call, *, persist=True,
+                             persist_model=None, provider_label=None):
     """Run ``call(model)`` against each candidate model until one succeeds.
 
     Failure handling per model:
@@ -159,6 +150,14 @@ def call_with_model_fallback(provider, configured_model, call, *, persist=True):
     - Model-gone (404/deprecated): skip to the next model immediately.
     - Any other error: re-raise immediately (bad API key, content policy, etc.).
 
+    Args:
+        provider: the API dialect, which selects the fallback chain.
+        persist_model: called with the model that worked when it is not the one
+            that was configured, so the caller can write it back to wherever it
+            keeps its settings. Suppressed by ``persist=False``.
+        provider_label: what to call this provider in the error, since several
+            configured providers can share a dialect.
+
     Returns:
         ``(result, used_model)``
 
@@ -166,6 +165,7 @@ def call_with_model_fallback(provider, configured_model, call, *, persist=True):
         ModelUnavailableError: every candidate failed (gone or persistently overloaded).
         Exception: a non-retryable, non-gone error from the first model that raised it.
     """
+    label = provider_label or provider
     candidates = candidate_models(provider, configured_model)
     last_error: BaseException | None = None
 
@@ -195,13 +195,27 @@ def call_with_model_fallback(provider, configured_model, call, *, persist=True):
             )
             continue
 
-        if persist and model != configured_model:
-            _persist_working_model(provider, model)
+        if persist and persist_model is not None and model != configured_model:
+            try:
+                persist_model(model)
+                logger.info(
+                    "Persisted working %s model '%s' (was failing over from a "
+                    "previously configured model).", label, model,
+                )
+            except Exception as exc:
+                logger.warning("Could not persist working model '%s': %s", model, exc)
         return result, model
 
+    if len(candidates) == 1:
+        raise ModelUnavailableError(
+            f"Model '{configured_model}' on provider '{label}' is unavailable or "
+            f"persistently overloaded, and this provider has no fallback chain. "
+            f"Pick a model '{label}' currently serves, in Settings. "
+            f"Last error: {last_error}"
+        )
     raise ModelUnavailableError(
-        f"The configured {provider} model '{configured_model}' and all fallbacks "
-        f"are unavailable or persistently overloaded: {candidates}. "
-        f"Pick a currently available {provider} model in Settings. "
+        f"The configured model '{configured_model}' on provider '{label}' and all "
+        f"fallbacks are unavailable or persistently overloaded: {candidates}. "
+        f"Pick a currently available model in Settings. "
         f"Last error: {last_error}"
     )

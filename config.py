@@ -74,6 +74,18 @@ migrate_legacy_database()
 
 # Default configuration values
 DEFAULT_CONFIG = {
+    # JSON array of AI provider records; see ai_providers.py. Empty on an
+    # install predating it, which derives an equivalent list from the
+    # llm_provider / *_api_key / *_model settings below.
+    "ai_providers": "",
+    "ai_extraction_provider": "",
+    # Speech-to-text: 'local' runs faster-whisper on this machine, 'provider'
+    # posts the audio to one of the configured AI providers.
+    "transcription_mode": "local",
+    "transcription_provider": "",
+    "transcription_model": "whisper-1",
+    # Superseded by ai_providers, kept so an existing install still boots with
+    # the provider it was set up with.
     "llm_provider": "openai",
     "openai_api_key": "",
     "openai_model": "gpt-5-mini-2025-08-07",
@@ -207,7 +219,33 @@ class Config:
         return default
 
     @property
+    def AI_PROVIDERS(self) -> str:
+        """Raw JSON for the provider registry; parsed by ai_providers.py."""
+        return self._get('ai_providers', DEFAULT_CONFIG['ai_providers'])
+
+    @property
+    def AI_EXTRACTION_PROVIDER(self) -> str:
+        """Id of the provider used to turn raw content into a recipe."""
+        return self._get('ai_extraction_provider',
+                         DEFAULT_CONFIG['ai_extraction_provider'])
+
+    @property
+    def TRANSCRIPTION_MODE(self) -> str:
+        mode = self._get('transcription_mode', DEFAULT_CONFIG['transcription_mode'])
+        return mode if mode in ('local', 'provider') else 'local'
+
+    @property
+    def TRANSCRIPTION_PROVIDER(self) -> str:
+        return self._get('transcription_provider',
+                         DEFAULT_CONFIG['transcription_provider'])
+
+    @property
+    def TRANSCRIPTION_MODEL(self) -> str:
+        return self._get('transcription_model', DEFAULT_CONFIG['transcription_model'])
+
+    @property
     def LLM_PROVIDER(self) -> str:
+        """Pre-registry provider choice. Only read when migrating."""
         return self._get('llm_provider', DEFAULT_CONFIG['llm_provider'])
 
     @property
