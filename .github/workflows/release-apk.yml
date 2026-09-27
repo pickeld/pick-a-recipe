@@ -15,12 +15,11 @@
 # Android refuses an update signed with a different key. Treat the keystore as
 # unrecoverable if lost.
 #
-# Runs on the self-hosted srv2 runner. Only `release: published` and
+# Runs on a GitHub-hosted runner. Only `release: published` and
 # `workflow_dispatch` trigger this, both of which require write access to the
-# repo — no `pull_request` trigger. That matters because this repo is public:
-# a fork PR running on a self-hosted runner would execute untrusted code on
-# srv2 and could read the signing secrets. Keep it that way; pre-merge checks
-# belong in ci.yml on GitHub-hosted runners.
+# repo — no `pull_request` trigger. That matters because this repo is public
+# and this workflow can read the signing secrets. Keep it that way; pre-merge
+# checks belong in ci.yml, which never sees them.
 name: Release APK
 
 on:
@@ -46,10 +45,10 @@ permissions:
 jobs:
   apk:
     name: Build and attach APK
-    # srv2, the only runner registered on this repo. Unlike ubuntu-latest it
-    # has no preinstalled JDK or Android SDK; both come from the shared
-    # ~/android-toolchain provisioned on the host (see the toolchain step).
-    runs-on: [self-hosted, Linux, X64]
+    # Hosted: the Android SDK and build-tools are preinstalled, and a fresh
+    # machine every run means no toolchain to keep provisioned by hand. The
+    # same combination already builds a debug APK in ci.yml.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -77,45 +76,12 @@ jobs:
             exit 1
           fi
 
-      # No actions/setup-java here: srv2 already carries a Temurin 17 JDK and
-      # the Android SDK (build-tools 35, platforms 34-36) under
-      # ~/android-toolchain, shared with the sibling pick-a-print runner.
-      # Downloading a second JDK per run would only burn disk on a host that
-      # runs near capacity. The runner's own .env exports these, but it only
-      # rereads that file when the service restarts, so resolve them here too
-      # and fail with something readable instead of a Gradle stack trace.
-      - name: Locate the Android toolchain
-        run: |
-          set -euo pipefail
-          TOOLCHAIN="$HOME/android-toolchain"
-          SDK="${ANDROID_SDK_ROOT:-$TOOLCHAIN/sdk}"
-          JDK="${JAVA_HOME:-$(find "$TOOLCHAIN" -maxdepth 1 -name 'jdk-*' | sort -V | tail -1)}"
-
-          # jq is not installed system-wide on srv2; it ships in the toolchain's
-          # own bin/, and subosito/flutter-action aborts without it.
-          for path in "$SDK/build-tools" "$SDK/platforms" "$JDK/bin/java" "$TOOLCHAIN/bin/jq"; do
-            if [[ ! -e "$path" ]]; then
-              echo "::error::Android toolchain incomplete on this runner: $path is missing." \
-                   "Reprovision ~/android-toolchain on srv2 (JDK 17 + SDK build-tools/platform 35 + jq)."
-              exit 1
-            fi
-          done
-
-          {
-            echo "JAVA_HOME=$JDK"
-            echo "ANDROID_HOME=$SDK"
-            echo "ANDROID_SDK_ROOT=$SDK"
-          } >> "$GITHUB_ENV"
-          {
-            echo "$TOOLCHAIN/bin"
-            echo "$JDK/bin"
-            echo "$SDK/platform-tools"
-          } >> "$GITHUB_PATH"
-
-          "$JDK/bin/java" -version
-          echo "jq:          $("$TOOLCHAIN/bin/jq" --version)"
-          echo "build-tools: $(ls "$SDK/build-tools" | tr '\n' ' ')"
-          echo "platforms:   $(ls "$SDK/platforms" | tr '\n' ' ')"
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Matches jvmTarget in android/app/build.gradle.kts, and ci.yml.
+          java-version: '17'
 
       - name: Set up Flutter
         # Third-party action, pinned to a commit rather than a movable tag.
@@ -123,12 +89,10 @@ jobs:
         with:
           flutter-version: 3.44.8
           channel: stable
-          # No cache: srv2 is persistent, so the SDK it unpacks into the
-          # runner's tool cache — plus ~/.pub-cache and ~/.gradle — already
-          # survive between runs on local disk. Routing gigabytes through
-          # GitHub's Actions cache on top of that is pure overhead, and is
-          # what exhausted the sibling repo's Actions storage quota.
-          cache: false
+          # A hosted runner starts empty, so the SDK does have to be cached
+          # here — unlike on a persistent host, where it survived on local
+          # disk. Same setting ci.yml already uses.
+          cache: true
 
       - name: Restore signing keystore
         working-directory: mobile/android
