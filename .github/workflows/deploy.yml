@@ -7,9 +7,15 @@
 #      which updates the "pick-a-recipe" stack (compose file + env)
 #      and pulls the freshly pushed image.
 #
-# Runs on a SELF-HOSTED runner inside the LAN (Portainer at
-# https://192.168.127.251:7441 is not reachable from GitHub-hosted runners).
-# Register a runner on srv2 or any LAN machine with docker + git installed:
+# Only the second job is self-hosted, and only because Portainer lives on the
+# LAN and GitHub-hosted runners cannot reach it. The build talks to Docker Hub
+# and nothing else, so it runs on a GitHub-hosted runner: this repository is
+# public, which makes those free, and it keeps multi-gigabyte build caches and
+# toolchains off hardware that is also serving other things. A self-hosted
+# runner that filled its disk used to take the whole deploy down with it.
+#
+# The deploy job needs only curl, jq and git — no Docker. Register a runner on
+# any LAN machine:
 #   repo → Settings → Actions → Runners → New self-hosted runner
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
@@ -44,7 +50,7 @@ permissions:
 jobs:
   build-push:
     name: Build & push image
-    runs-on: [self-hosted]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,20 +66,26 @@ jobs:
 
       # amd64 only: srv2 is amd64 and QEMU-emulated arm64 builds of this image
       # take ~15-30 min. Use ./build-and-push.sh for manual multi-arch pushes.
-      # No explicit cache config: the docker-container builder's cache volume
-      # persists on the self-hosted host between runs.
+      #
+      # A hosted runner starts empty every time, so the layer cache has to live
+      # somewhere: type=gha keeps it in GitHub's Actions cache rather than in a
+      # builder volume on a machine we own.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             pickeld/pick-a-recipe:latest
             pickeld/pick-a-recipe:${{ github.sha }}
 
   deploy:
     name: Deploy to srv2 via Portainer
+    # Self-hosted purely for LAN reach: scripts/portainer-deploy.sh is curl and
+    # jq against the Portainer API, so this needs no Docker and no toolchain.
     runs-on: [self-hosted]
     needs: build-push
     steps:
