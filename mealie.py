@@ -379,6 +379,11 @@ class Mealie(RecipeExporter):
         logger.info(f"[Mealie] Current recipe nutrition before merge: {current.get('nutrition')}")
         
         update_payload.update(update_fields)
+
+        # Keep the name Mealie assigned on create. On a name clash Mealie stores
+        # "Name (1)" under a free slug; sending the bare name back makes it
+        # re-derive the taken slug and reject the whole update with 400.
+        update_payload["name"] = current.get("name") or update_payload["name"]
         
         # Log what's in update_payload nutrition after merge
         logger.info(f"[Mealie] Update payload nutrition after merge: {update_payload.get('nutrition')}")
