@@ -457,9 +457,15 @@ The official image is available on Docker Hub: [`pickeld/pick-a-recipe`](https:/
 # Pull the latest image
 docker pull pickeld/pick-a-recipe:latest
 
-# Or pull a specific version
-docker pull pickeld/pick-a-recipe:v1.0.0
+# Or pin an exact build: every push to main is also tagged with its commit SHA
+docker pull pickeld/pick-a-recipe:<commit-sha>
 ```
+
+Published for `linux/amd64` and `linux/arm64`, so the same tag works on
+Intel/AMD machines, a Raspberry Pi 4 or 5 running a 64-bit OS, Apple Silicon
+and ARM cloud servers. 32-bit ARM (`linux/arm/v7`, e.g. 32-bit Raspberry Pi OS)
+is not supported: faster-whisper's CTranslate2 backend and deno ship no builds
+for it.
 
 ### Environment Variables
 
@@ -551,7 +557,9 @@ volumes:
 
 ### Building and Publishing to Docker Hub
 
-Multi-arch image (`linux/amd64`, `linux/arm64`):
+CI publishes the multi-arch image (`linux/amd64`, `linux/arm64`) on every push
+to main — see `.github/workflows/deploy.yml` — and will not move `:latest`
+unless both architectures built. To push one by hand:
 
 ```bash
 docker logout && docker login -u pickeld   # or pickeld@gmail.com

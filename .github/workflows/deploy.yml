@@ -1,18 +1,22 @@
 # Build & Deploy — pick-a-recipe
 #
 # On every push to main:
-#   1. Build the Docker image (linux/amd64) and push it to Docker Hub
-#      as pickeld/pick-a-recipe:latest (+ :sha-<commit> for rollback).
-#   2. Call Portainer on srv2 via scripts/portainer-deploy.sh --pull,
+#   1. Build the Docker image for linux/amd64 and linux/arm64, each on a
+#      native runner, and push both to Docker Hub by digest.
+#   2. Join the two into one multi-arch image, check that both platforms are
+#      really in it, and only then tag it pickeld/pick-a-recipe:latest
+#      (+ :<commit sha> for rollback).
+#   3. Call Portainer on srv2 via scripts/portainer-deploy.sh --pull,
 #      which updates the "pick-a-recipe" stack (compose file + env)
 #      and pulls the freshly pushed image.
 #
-# Only the second job is self-hosted, and only because Portainer lives on the
+# Only the last job is self-hosted, and only because Portainer lives on the
 # LAN and GitHub-hosted runners cannot reach it. The build talks to Docker Hub
-# and nothing else, so it runs on a GitHub-hosted runner: this repository is
-# public, which makes those free, and it keeps multi-gigabyte build caches and
-# toolchains off hardware that is also serving other things. A self-hosted
-# runner that filled its disk used to take the whole deploy down with it.
+# and nothing else, so it runs on GitHub-hosted runners: this repository is
+# public, which makes those free — the arm64 ones included — and it keeps
+# multi-gigabyte build caches and toolchains off hardware that is also serving
+# other things. A self-hosted runner that filled its disk used to take the
+# whole deploy down with it.
 #
 # The deploy job needs only curl, jq and git — no Docker. Register a runner on
 # any LAN machine:
@@ -47,10 +51,28 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  IMAGE: pickeld/pick-a-recipe
+
 jobs:
-  build-push:
-    name: Build & push image
-    runs-on: ubuntu-latest
+  build:
+    name: Build image (${{ matrix.arch }})
+    # This used to build amd64 alone, because emulating arm64 under QEMU took
+    # 15-30 minutes. Every push to main then replaced :latest with an
+    # amd64-only image, and anyone pulling on a Raspberry Pi or another arm64
+    # host got "no matching manifest for linux/arm64/v8" (issue #45). A native
+    # arm64 runner builds as fast as the amd64 one, so both run side by side.
+    #
+    # Keep this list in step with REQUIRED_PLATFORMS in the publish job and
+    # with the image job in ci.yml.
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,30 +86,103 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # amd64 only: srv2 is amd64 and QEMU-emulated arm64 builds of this image
-      # take ~15-30 min. Use ./build-and-push.sh for manual multi-arch pushes.
+      # Pushed by digest, with no tag: any tag set here would name a
+      # single-architecture image, which is exactly what must not reach users.
+      # The publish job gives the joined image its tags.
       #
       # A hosted runner starts empty every time, so the layer cache has to live
       # somewhere: type=gha keeps it in GitHub's Actions cache rather than in a
-      # builder volume on a machine we own.
-      - name: Build and push
+      # builder volume on a machine we own. Each architecture has its own
+      # scope, or the two builds would keep evicting each other's layers.
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64
-          push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: |
-            pickeld/pick-a-recipe:latest
-            pickeld/pick-a-recipe:${{ github.sha }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.arch }}
+
+      - name: Hand the digest to the publish job
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-arch image
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Join the per-architecture images
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # One empty file per digest, named after it — see the build job.
+          sources=()
+          for digest in *; do
+            sources+=("$IMAGE@sha256:$digest")
+          done
+          docker buildx imagetools create --tag "$IMAGE:$GITHUB_SHA" "${sources[@]}"
+
+      # The guard against issue #45 coming back. It runs before :latest moves,
+      # so an image that is missing an architecture only ever exists under its
+      # commit tag, which nobody pulls by accident. Fixing this means building
+      # the missing platform, not dropping it from the list.
+      - name: Check every platform is published
+        env:
+          REQUIRED_PLATFORMS: linux/amd64 linux/arm64
+        run: |
+          set -euo pipefail
+          # Attestation manifests are listed as unknown/unknown; skip them.
+          published=$(docker buildx imagetools inspect --raw "$IMAGE:$GITHUB_SHA" \
+            | jq -r '.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"' \
+            | sort -u)
+          printf 'Published platforms:\n%s\n' "$published"
+
+          missing=()
+          for platform in $REQUIRED_PLATFORMS; do
+            grep -qxF "$platform" <<<"$published" || missing+=("$platform")
+          done
+          if ((${#missing[@]})); then
+            echo "::error::$IMAGE:$GITHUB_SHA has no ${missing[*]} image; leaving :latest where it was"
+            exit 1
+          fi
+
+      - name: Move latest
+        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$GITHUB_SHA"
 
   deploy:
     name: Deploy to srv2 via Portainer
     # Self-hosted purely for LAN reach: scripts/portainer-deploy.sh is curl and
     # jq against the Portainer API, so this needs no Docker and no toolchain.
     runs-on: [self-hosted]
-    needs: build-push
+    needs: publish
     steps:
       - name: Checkout
         uses: actions/checkout@v4
