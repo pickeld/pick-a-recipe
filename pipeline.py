@@ -113,21 +113,28 @@ def run_extraction_pipeline(
         if reporter.is_cancelled():
             return PipelineResult(error="cancelled")
 
-        reporter.update("transcribe", "Transcribing audio...", 35)
         transcriber = Transcriber(video_path)
         lang = config.TARGET_LANGUAGE
-        audio_cache = os.path.join(dish_dir, f"transcription_{lang}.txt")
-
-        if os.path.exists(audio_cache):
-            reporter.update("transcribe", "Using cached transcription", 40)
-            with open(audio_cache, "r", encoding="utf-8") as f:
-                transcription = f.read()
+        # Off means ignore audio entirely, including a transcription left over
+        # from an earlier run. Writing an empty cache here would also stick:
+        # turning speech to text back on would keep reusing that empty file.
+        if config.TRANSCRIPTION_MODE == "off":
+            reporter.update("transcribe", "Speech to text is off", 50)
+            transcription = ""
         else:
-            transcription = transcriber.transcribe()
-            with open(audio_cache, "w", encoding="utf-8") as f:
-                f.write(transcription)
+            reporter.update("transcribe", "Transcribing audio...", 35)
+            audio_cache = os.path.join(dish_dir, f"transcription_{lang}.txt")
+
+            if os.path.exists(audio_cache):
+                reporter.update("transcribe", "Using cached transcription", 40)
+                with open(audio_cache, "r", encoding="utf-8") as f:
+                    transcription = f.read()
+            else:
+                transcription = transcriber.transcribe()
+                with open(audio_cache, "w", encoding="utf-8") as f:
+                    f.write(transcription)
+            reporter.update("transcribe", "Audio transcribed", 50)
         stats.add_text(transcription)
-        reporter.update("transcribe", "Audio transcribed", 50)
 
         if reporter.is_cancelled():
             return PipelineResult(error="cancelled")

@@ -140,6 +140,30 @@ class SettingsRoundTripTests(unittest.TestCase):
         config.reload()
         self.assertIsNone(ai_providers.transcription_provider())
 
+    def test_speech_to_text_can_be_switched_off(self):
+        """Off must stick, and must not select a provider that would transcribe."""
+        import ai_providers
+        from config import config
+
+        client = self._client()
+        response = client.post('/settings', data=MultiDict(
+            _row('Gemini', 'gemini', key='gk', model='gemini-2.5-flash',
+                 provider_id='gemini')
+            + [
+                ('ai_extraction_provider', 'gemini'),
+                ('transcription_mode', 'off'),
+            ]
+        ))
+        self.assertEqual(response.status_code, 302)
+
+        config.reload()
+        self.assertEqual(config.TRANSCRIPTION_MODE, 'off')
+        self.assertIsNone(ai_providers.transcription_provider())
+
+        body = client.get('/settings').get_data(as_text=True)
+        self.assertIn('Off (on-screen text only)', body)
+        self.assertIn('value="off" selected', body)
+
     def test_the_settings_page_renders_the_new_sections(self):
         body = self._client().get('/settings').get_data(as_text=True)
         self.assertIn('AI Providers', body)
@@ -152,6 +176,9 @@ class SettingsRoundTripTests(unittest.TestCase):
         self.assertTrue(payload['providers'])
         self.assertIn('openai-compatible', payload['api_types'])
         self.assertTrue(payload['api_types']['openai-compatible']['needs_base_url'])
+        gemini = payload['api_types']['gemini']
+        self.assertIn('aistudio.google.com/apikey', gemini['key_url'])
+        self.assertIn('Gemini Pro', gemini['key_hint'])
 
 
 if __name__ == '__main__':

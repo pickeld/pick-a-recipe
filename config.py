@@ -80,7 +80,9 @@ DEFAULT_CONFIG = {
     "ai_providers": "",
     "ai_extraction_provider": "",
     # Speech-to-text: 'local' runs faster-whisper on this machine, 'provider'
-    # posts the audio to one of the configured AI providers.
+    # posts the audio to one of the configured AI providers, 'off' skips audio
+    # and builds the recipe from on-screen text. 'off' never loads Whisper,
+    # which matters on a small machine where the model takes the process down.
     "transcription_mode": "local",
     "transcription_provider": "",
     "transcription_model": "whisper-1",
@@ -232,7 +234,7 @@ class Config:
     @property
     def TRANSCRIPTION_MODE(self) -> str:
         mode = self._get('transcription_mode', DEFAULT_CONFIG['transcription_mode'])
-        return mode if mode in ('local', 'provider') else 'local'
+        return mode if mode in ('local', 'provider', 'off') else 'local'
 
     @property
     def TRANSCRIPTION_PROVIDER(self) -> str:

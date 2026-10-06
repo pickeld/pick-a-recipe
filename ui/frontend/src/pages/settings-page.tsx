@@ -507,7 +507,9 @@ export function SettingsPage() {
           <CardDescription>
             Turning the video&apos;s audio into text. Whisper runs on this server and
             needs no API; a provider transcribes over the network instead, which is
-            faster on a small machine.
+            faster on a small machine. Off skips audio entirely, so Whisper is never
+            loaded. Use it when the only configured provider cannot transcribe and
+            the local model is too heavy for this machine.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -520,13 +522,19 @@ export function SettingsPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="off">Off (on-screen text only)</SelectItem>
                 <SelectItem value="local">Whisper on this server (no API needed)</SelectItem>
                 <SelectItem value="provider">One of the AI providers above</SelectItem>
               </SelectContent>
             </Select>
           </Field>
 
-          {transcriptionMode === 'local' ? (
+          {transcriptionMode === 'off' ? (
+            <p className="text-xs text-muted-foreground">
+              Audio is ignored. Recipes are built from on-screen text and the
+              description, and Whisper is not loaded.
+            </p>
+          ) : transcriptionMode === 'local' ? (
             <>
               <Field
                 label="Whisper model"
