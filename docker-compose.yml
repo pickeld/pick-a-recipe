@@ -8,6 +8,10 @@ services:
     container_name: pick-a-recipe
     restart: unless-stopped
     ports:
+      # Plain HTTP. Open http://<host>:5006. There is no default username or
+      # password; the first visit creates the account. A reverse proxy must
+      # connect here with HTTP. Sending plain HTTP to the proxy's HTTPS port
+      # produces "Client sent an HTTP request to an HTTPS server."
       - "5006:5006"
     environment:
       - HOST=0.0.0.0
