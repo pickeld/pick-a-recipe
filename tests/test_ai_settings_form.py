@@ -180,6 +180,34 @@ class SettingsRoundTripTests(unittest.TestCase):
         self.assertIn('aistudio.google.com/apikey', gemini['key_url'])
         self.assertIn('Gemini Pro', gemini['key_hint'])
 
+    def test_a_refresh_of_settings_serves_the_app_when_it_is_built(self):
+        """Opening Settings and refreshing it must be the same page.
+
+        The in-app link never leaves the bundle. A refresh used to hit this
+        route and render the old template, which is a different layout.
+        """
+        import app as app_module
+
+        dist = tempfile.mkdtemp()
+        with open(os.path.join(dist, 'index.html'), 'w', encoding='utf-8') as handle:
+            handle.write('<!doctype html><div id="root">spa-settings</div>')
+        previous = app_module.FRONTEND_DIST
+        app_module.FRONTEND_DIST = dist
+        try:
+            response = self._client().get('/settings')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'spa-settings', response.data)
+            self.assertNotIn(b'provider_api_type[]', response.data)
+
+            saved = self._client().post('/settings', data=MultiDict(
+                _row('OpenAI', 'openai', key='sk-a', model='gpt-5-mini',
+                     provider_id='openai')
+                + [('ai_extraction_provider', 'openai')]
+            ))
+            self.assertEqual(saved.status_code, 302)
+        finally:
+            app_module.FRONTEND_DIST = previous
+
 
 if __name__ == '__main__':
     unittest.main()
