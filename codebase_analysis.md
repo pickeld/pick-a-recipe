@@ -152,7 +152,7 @@ python main.py "https://www.tiktok.com/@user/video/123"
 
 **Access:**
 - Web UI: `http://localhost:5006`
-- Default credentials: `admin` / `admin123`
+- No default account. The first visit opens `/setup` to create the admin.
 
 ## Configuration
 

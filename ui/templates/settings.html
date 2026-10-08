@@ -38,7 +38,9 @@
                         <div class="form-group">
                             <label>API key</label>
                             <input type="password" name="provider_api_key[]" value="{{ provider.api_key }}"
-                                   placeholder="sk-..." autocomplete="off" autocapitalize="none" spellcheck="false">
+                                   placeholder="sk-..." autocomplete="off" autocapitalize="none" spellcheck="false"
+                                   data-provider-key>
+                            <small class="form-hint" data-key-hint></small>
                         </div>
                         <div class="form-group">
                             <label>Model</label>
@@ -203,17 +205,22 @@
         <!-- Speech to text -->
         <div class="settings-section">
             <h2><i class="fas fa-microphone"></i> Speech to Text</h2>
-            <p class="section-description">Turning the video's audio into text. Whisper runs on this server and needs no API; a provider transcribes over the network instead, which is faster on a small machine.</p>
+            <p class="section-description">Turning the video's audio into text. Whisper runs on this server and needs no API; a provider transcribes over the network instead, which is faster on a small machine. Off skips audio entirely, so Whisper is never loaded. Use it when the only configured provider cannot transcribe and the local model is too heavy for this machine.</p>
 
             <div class="form-group">
                 <label for="transcription_mode">Transcribe with</label>
                 <select id="transcription_mode" name="transcription_mode" class="form-select">
-                    <option value="local" {% if config.transcription_mode != 'provider' %}selected{% endif %}>Whisper on this server (no API needed)</option>
+                    <option value="off" {% if config.transcription_mode == 'off' %}selected{% endif %}>Off (on-screen text only)</option>
+                    <option value="local" {% if config.transcription_mode != 'provider' and config.transcription_mode != 'off' %}selected{% endif %}>Whisper on this server (no API needed)</option>
                     <option value="provider" {% if config.transcription_mode == 'provider' %}selected{% endif %}>One of the AI providers above</option>
                 </select>
             </div>
 
-            <div data-transcription-mode="local" {% if config.transcription_mode == 'provider' %}hidden{% endif %}>
+            <div data-transcription-mode="off" {% if config.transcription_mode != 'off' %}hidden{% endif %}>
+                <small class="form-hint">Audio is ignored. Recipes are built from on-screen text and the description, and Whisper is not loaded.</small>
+            </div>
+
+            <div data-transcription-mode="local" {% if config.transcription_mode == 'provider' or config.transcription_mode == 'off' %}hidden{% endif %}>
                 <div class="form-group">
                     <label for="whisper_model">Whisper model</label>
                     <select id="whisper_model" name="whisper_model" class="form-select">
@@ -378,6 +385,8 @@ function rowFields(row) {
         name: row.querySelector('[data-provider-name]'),
         type: row.querySelector('[data-provider-type]'),
         model: row.querySelector('[data-provider-model]'),
+        key: row.querySelector('[data-provider-key]'),
+        keyHint: row.querySelector('[data-key-hint]'),
         baseUrl: row.querySelector('[data-provider-base-url]'),
         baseGroup: row.querySelector('[data-base-url-group]'),
         id: row.querySelector('input[name="provider_id[]"]'),
@@ -392,6 +401,21 @@ function syncBaseUrl(row) {
     f.baseGroup.hidden = !spec.needs_base_url;
     if (spec.needs_base_url && !f.baseUrl.value) {
         f.baseUrl.placeholder = spec.default_base_url || 'https://api.example.com/v1';
+    }
+    if (f.key) f.key.placeholder = spec.key_placeholder || 'sk-...';
+    if (f.keyHint) {
+        f.keyHint.replaceChildren();
+        if (spec.key_hint) {
+            f.keyHint.append(document.createTextNode(spec.key_hint + ' '));
+        }
+        if (spec.key_url) {
+            const link = document.createElement('a');
+            link.href = spec.key_url;
+            link.target = '_blank';
+            link.rel = 'noreferrer';
+            link.textContent = spec.key_link_label || spec.key_url;
+            f.keyHint.append(link);
+        }
     }
 }
 

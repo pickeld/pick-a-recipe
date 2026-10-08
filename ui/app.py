@@ -295,6 +295,9 @@ oauth = None
 oidc_client = None
 if LOCAL_AUTH:
     print('[Auth] AUTH_MODE=local — sign in with an account stored by this app.')
+    print('[Auth] There is no default username or password. A new install '
+          'opens /setup to create the admin account. This service speaks '
+          'HTTP, not HTTPS.')
 elif OIDC_ISSUER_URL and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET:
     if _LEGACY_OIDC_ENV:
         print('[Auth] NOTE: ' + ', '.join(sorted(set(_LEGACY_OIDC_ENV))) +
@@ -1285,7 +1288,16 @@ def api_model_catalog():
 @app.route('/settings', methods=['GET', 'POST'])
 @login_required
 def settings():
-    """Settings page for configuration."""
+    """Settings page for configuration.
+
+    A click on Settings stays inside the app and never hits this view. A
+    refresh does, and used to render the old template, so the same URL showed
+    two different layouts. With a built frontend, the refresh gets the app too.
+    """
+    if request.method == 'GET' and os.path.exists(
+            os.path.join(FRONTEND_DIST, 'index.html')):
+        return send_from_directory(FRONTEND_DIST, 'index.html')
+
     config = load_config()
 
     if request.method == 'POST':

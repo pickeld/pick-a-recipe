@@ -199,13 +199,28 @@ export function AiProvidersCard({
                   <Label>API key</Label>
                   <Input
                     type="password"
-                    placeholder="sk-..."
+                    placeholder={spec?.key_placeholder || 'sk-...'}
                     autoComplete="off"
                     autoCapitalize="none"
                     spellCheck={false}
                     value={provider.api_key}
                     onChange={e => update(index, { api_key: e.target.value })}
                   />
+                  {spec?.key_hint && (
+                    <p className="text-xs text-muted-foreground">
+                      {spec.key_hint}{' '}
+                      {spec.key_url && (
+                        <a
+                          href={spec.key_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline underline-offset-2 hover:text-foreground"
+                        >
+                          {spec.key_link_label || spec.key_url}
+                        </a>
+                      )}
+                    </p>
+                  )}
                 </div>
                 <ModelField
                   catalog={catalogFor(provider)}

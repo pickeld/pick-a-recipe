@@ -177,12 +177,20 @@ class Transcriber:
 
         Runs Whisper on this machine unless Settings names a provider to
         transcribe through. A provider that fails falls back to the local
-        model rather than losing the audio entirely.
+        model rather than losing the audio entirely. Settings can also turn
+        speech to text off, in which case this returns immediately and never
+        extracts audio or loads Whisper.
 
         Args:
             language: Language code for transcription (e.g., 'he', 'en').
                      Defaults to config.TARGET_LANGUAGE if not specified.
         """
+        if config.TRANSCRIPTION_MODE == "off":
+            logger.info(
+                "[Transcribe] Speech to text is off; continuing with visual text only."
+            )
+            return ""
+
         audio_path = self._extract_audio()
         if audio_path is None:
             logger.info(

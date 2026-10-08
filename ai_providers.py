@@ -43,6 +43,13 @@ API_TYPES: dict[str, dict[str, Any]] = {
         # models.dev provider id used to suggest model names in Settings.
         "catalog": "openai",
         "example_model": "gpt-5-mini-2025-08-07",
+        "key_placeholder": "sk-...",
+        "key_hint": (
+            "Create a secret key on the OpenAI platform. A ChatGPT "
+            "subscription does not include an API key."
+        ),
+        "key_url": "https://platform.openai.com/api-keys",
+        "key_link_label": "OpenAI API keys",
     },
     OPENAI_COMPATIBLE: {
         "label": "OpenAI-compatible (Chat Completions)",
@@ -50,6 +57,13 @@ API_TYPES: dict[str, dict[str, Any]] = {
         "default_base_url": "https://openrouter.ai/api/v1",
         "catalog": "",  # inferred from the base URL; see catalog_for()
         "example_model": "openai/gpt-4o-mini",
+        "key_placeholder": "sk-or-...",
+        "key_hint": (
+            "Use the key from that service. A local server such as Ollama "
+            "needs no key."
+        ),
+        "key_url": "https://openrouter.ai/keys",
+        "key_link_label": "OpenRouter keys",
     },
     GEMINI: {
         "label": "Google Gemini",
@@ -57,6 +71,17 @@ API_TYPES: dict[str, dict[str, Any]] = {
         "default_base_url": "",
         "catalog": "google",
         "example_model": "gemini-2.5-flash",
+        "key_placeholder": "AIza...",
+        "key_hint": (
+            "Create a key in Google AI Studio and paste it here. A Gemini "
+            "Pro or Advanced subscription in the Gemini app does not include "
+            "an API key. Then set the model to gemini-2.5-flash, save, and "
+            "choose this provider under AI Extraction. Gemini reads the "
+            "video and the on-screen text. Set Speech to Text to Off, "
+            "because Gemini cannot transcribe audio."
+        ),
+        "key_url": "https://aistudio.google.com/apikey",
+        "key_link_label": "Google AI Studio",
     },
     ANTHROPIC: {
         "label": "Anthropic (Claude)",
@@ -64,6 +89,10 @@ API_TYPES: dict[str, dict[str, Any]] = {
         "default_base_url": "",
         "catalog": "anthropic",
         "example_model": "claude-sonnet-4-5",
+        "key_placeholder": "sk-ant-...",
+        "key_hint": "Create a key in the Anthropic console.",
+        "key_url": "https://console.anthropic.com/settings/keys",
+        "key_link_label": "Anthropic console",
     },
 }
 

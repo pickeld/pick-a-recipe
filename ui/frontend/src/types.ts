@@ -276,6 +276,12 @@ export interface ApiTypeSpec {
   /** models.dev provider id whose models to suggest, or '' for none. */
   catalog: string
   example_model: string
+  /** Shown in the empty API key field. A format example, never a real key. */
+  key_placeholder?: string
+  /** Where this dialect's key comes from, and what it is not. */
+  key_hint?: string
+  key_url?: string
+  key_link_label?: string
 }
 
 // ===== Config / settings =====
