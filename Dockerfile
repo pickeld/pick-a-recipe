@@ -43,15 +43,18 @@ COPY --from=node-build /build/dist /app/ui/frontend/dist
 # Expose the web UI port
 EXPOSE 5006
 
-# Container health probe: hits the unauthenticated /api/health endpoint which
-# verifies yt-dlp + the configured LLM. Marks the container unhealthy when the
-# top outage classes (model drift / yt-dlp drift) are present.
+# Liveness only. /api/health returns 503 until an AI provider key is saved,
+# which is the normal state of a new container. A NAS that treats an unhealthy
+# container as down would never let that first visit through.
 HEALTHCHECK --interval=5m --timeout=20s --start-period=40s --retries=3 \
-    CMD curl -fsS http://localhost:5006/api/health || exit 1
+    CMD curl -fsS http://localhost:5006/healthz || exit 1
 
 # Default environment variables
 ENV FLASK_DEBUG=false
 ENV PYTHONPATH=/app
 
-# Upgrade yt-dlp (with curl-cffi for Instagram impersonation) on startup
-CMD ["sh", "-c", "pip install --upgrade \"yt-dlp[curl-cffi]\" && python ui/app.py"]
+# Refresh yt-dlp on startup so extractors keep up with the sites, but do not
+# wait on the network. A NAS often has no DNS yet when the container is first
+# started, and a failed upgrade used to keep the server from listening at all.
+# The image already contains a working yt-dlp.
+CMD ["sh", "-c", "pip install --disable-pip-version-check --retries 0 --timeout 15 --upgrade \"yt-dlp[curl-cffi]\" || echo '[startup] yt-dlp upgrade skipped'; exec python ui/app.py"]

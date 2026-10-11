@@ -4,7 +4,7 @@ A modern web interface for the Pick-a-Recipe video recipe extractor.
 
 ## Features
 
-- 🔐 **Local accounts or Authentik SSO (OIDC)** — chosen with `AUTH_MODE`
+- 🔐 **Local accounts or single sign-on (OIDC)** — chosen with `AUTH_MODE`
 - 📹 **URL Input** - Paste video URLs from TikTok, YouTube, Instagram, etc.
 - 📊 **Real-time Progress** - Watch the extraction process with live updates
 - ⚙️ **Configuration Management** - Save all settings through the web interface
@@ -72,8 +72,10 @@ Sign-in is always required. `AUTH_MODE` picks where accounts come from:
   can add further accounts; there is no self-registration. Admins manage accounts
   from the settings page: add, promote, demote, set a password, delete. You
   cannot demote yourself or the last admin.
-- `authentik` — Authentik single sign-on (OIDC). Needs `AUTHENTIK_CLIENT_ID` and
-  `AUTHENTIK_CLIENT_SECRET`. Password sign-in is refused in this mode.
+- `oidc` — single sign-on through any OpenID Connect provider (Authentik,
+  Authelia, Keycloak, Pocket ID, …). Needs `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`
+  and `OIDC_CLIENT_SECRET`. Password sign-in is refused in this mode. The old
+  `AUTH_MODE=authentik` and `AUTHENTIK_*` names still work.
 
 `AUTH_MODE=none` is gone. Instances still setting it boot with a warning as
 `local`, and setup adopts the old passwordless account so its data survives.
@@ -82,7 +84,7 @@ The Android app in `../mobile/` uses JWT bearer tokens instead of cookies,
 enabled by setting `JWT_SECRET_KEY`. Bearer and cookie auth run side by side on
 the existing endpoints, with cookies taking precedence. It picks its sign-in from
 `/api/auth/status`: `POST /api/mobile/auth/login` for local accounts, or the
-browser handshake for Authentik. Both modes are covered, so the published APK
+browser handshake for single sign-on. Both modes are covered, so the published APK
 works against an instance with no identity provider.
 
 See the [root README](../README.md#authentication) for the full setup.
@@ -133,7 +135,7 @@ The UI uses SQLite for data storage. A single database file is created in the pr
 
 - `data/pick-a-recipe.db` - SQLite database containing:
   - `users` table - accounts; `password_hash` for local accounts, `oidc_sub` for
-    Authentik ones
+    single-sign-on ones
   - `config` table - Configuration key-value pairs
 
 ## WebSocket Progress Events
@@ -165,7 +167,7 @@ The UI uses Socket.IO for real-time progress updates. The stages are:
   (IP, username) rather than locking the account
 - Wrong password and unknown username give the same response, so the login form
   does not reveal which accounts exist
-- With Authentik, access requires membership in the configured user group; admin
-  features require the admin group
+- With OIDC, access requires membership in the configured user group (unless
+  `OIDC_USER_GROUP` is empty); admin features require the admin group
 - Session management uses Flask's secure sessions
 - API keys are stored in the local configuration file

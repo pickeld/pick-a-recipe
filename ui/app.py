@@ -24,6 +24,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 import mobile_auth
 import passwords
 import login_throttle
+import push
 from helpers import setup_logger
 from database import (
     init_db, load_config, save_config,
@@ -194,7 +195,9 @@ job_manager = init_job_manager(socketio)
 # ===== Authentication mode =====
 # 'local' (default) keeps username and password accounts in this app's own
 # database, so a fresh container works with no configuration beyond choosing a
-# password on first run. 'authentik' delegates to Authentik single sign-on.
+# password on first run. 'oidc' delegates to an OpenID Connect provider —
+# Authentik, Authelia, Keycloak, Pocket ID, Zitadel and the rest all speak the
+# same protocol, so none of them is special-cased here.
 #
 # There is no way to turn authentication off. Settings holds the LLM, Mealie and
 # Tandoor API keys, so an open instance hands those to anyone who can reach the
@@ -217,11 +220,20 @@ if AUTH_MODE == 'none':
           "preserved. Update your configuration to AUTH_MODE=local.")
     AUTH_MODE = 'local'
 
-if AUTH_MODE not in ('local', 'authentik'):
+if AUTH_MODE == 'authentik':
+    # OIDC support was written against Authentik and named after it, which read
+    # as "this only works with Authentik". The protocol is the same everywhere,
+    # so the mode is now 'oidc'; the old spelling keeps working unchanged.
+    print("[Auth] NOTE: AUTH_MODE=authentik is deprecated and now means "
+          "AUTH_MODE=oidc. Authentik behaves exactly as before — the setting "
+          "is simply no longer named after one provider.")
+    AUTH_MODE = 'oidc'
+
+if AUTH_MODE not in ('local', 'oidc'):
     raise RuntimeError(
         f"Invalid AUTH_MODE={AUTH_MODE!r}. Use 'local' for username and password "
-        "accounts stored by this app (default), or 'authentik' for Authentik "
-        "single sign-on."
+        "accounts stored by this app (default), or 'oidc' for single sign-on "
+        "through an OpenID Connect provider."
     )
 
 LOCAL_AUTH = AUTH_MODE == 'local'
@@ -231,35 +243,86 @@ LOCAL_USERNAME = (
     os.environ.get('AUTH_LOCAL_USERNAME') or _DEFAULT_LOCAL_USERNAME
 ).strip() or _DEFAULT_LOCAL_USERNAME
 
-# ===== Authentication via Authentik (OIDC) =====
-# Single sign-on through the self-hosted Authentik instance at auth.pickel.me.
-# Access requires membership in AUTHENTIK_USER_GROUP (admins additionally in
-# AUTHENTIK_ADMIN_GROUP). In Authentik, add the "authentik read groups" scope
-# mapping to the provider so the `groups` claim is included in tokens.
-AUTHENTIK_ISSUER_URL = os.environ.get(
-    'AUTHENTIK_ISSUER_URL',
-    'https://auth.pickel.me/application/o/pick-a-recipe',
-).rstrip('/')
-AUTHENTIK_USER_GROUP = os.environ.get('AUTHENTIK_USER_GROUP', 'pick-a-recipe-users')
-AUTHENTIK_ADMIN_GROUP = os.environ.get('AUTHENTIK_ADMIN_GROUP', 'admins')
+# ===== Authentication via OpenID Connect =====
+# Provider-agnostic: the app uses discovery, the authorization code flow and
+# standard claims, all of which every OIDC implementation offers. Access
+# requires membership in OIDC_USER_GROUP (admins additionally in
+# OIDC_ADMIN_GROUP), read from the claim named by OIDC_GROUPS_CLAIM. Leave
+# OIDC_USER_GROUP empty to admit every authenticated user, which is what a
+# provider that does not expose groups at all needs.
+#
+# Getting groups into the token differs per provider: Authentik needs the
+# "authentik read groups" scope mapping on the provider, Keycloak a group
+# membership mapper, Authelia the `groups` scope.
+_LEGACY_OIDC_ENV: list[str] = []
+
+
+def _oidc_env(name: str, default: str = '', *, empty_is_unset: bool = True) -> str:
+    """Read OIDC_<name>, falling back to the pre-rename AUTHENTIK_<name>.
+
+    ``empty_is_unset`` decides what an empty OIDC_* value means. For a client
+    id or an issuer it means nothing at all, and Compose hands every declared
+    variable to the container whether or not the operator set it - so an
+    upgraded stack passing OIDC_CLIENT_ID="" alongside a real
+    AUTHENTIK_CLIENT_ID has to keep working, or single sign-on fails closed on
+    the deploy. For a group name, empty is the deliberate "admit everyone", so
+    there absence alone falls back.
+    """
+    value = os.environ.get(f'OIDC_{name}')
+    if value is not None and (value.strip() or not empty_is_unset):
+        return value
+    legacy = os.environ.get(f'AUTHENTIK_{name}')
+    if legacy is not None and (legacy.strip() or not empty_is_unset):
+        _LEGACY_OIDC_ENV.append(f'AUTHENTIK_{name}')
+        return legacy
+    return value if value is not None else default
+
+
+OIDC_ISSUER_URL = _oidc_env('ISSUER_URL').strip().rstrip('/')
+OIDC_CLIENT_ID = _oidc_env('CLIENT_ID').strip()
+OIDC_CLIENT_SECRET = _oidc_env('CLIENT_SECRET').strip()
+OIDC_USER_GROUP = _oidc_env(
+    'USER_GROUP', 'pick-a-recipe-users', empty_is_unset=False).strip()
+OIDC_ADMIN_GROUP = _oidc_env(
+    'ADMIN_GROUP', 'admins', empty_is_unset=False).strip()
+OIDC_GROUPS_CLAIM = (os.environ.get('OIDC_GROUPS_CLAIM') or 'groups').strip()
+OIDC_SCOPES = (os.environ.get('OIDC_SCOPES') or 'openid email profile groups').strip()
+# Shown on the sign-in button, so an operator can say "Sign in with Keycloak"
+# rather than something generic.
+OIDC_PROVIDER_NAME = (os.environ.get('OIDC_PROVIDER_NAME') or '').strip() or 'SSO'
 
 oauth = None
+oidc_client = None
 if LOCAL_AUTH:
     print('[Auth] AUTH_MODE=local — sign in with an account stored by this app.')
-elif os.environ.get('AUTHENTIK_CLIENT_ID') and os.environ.get('AUTHENTIK_CLIENT_SECRET'):
+    print('[Auth] There is no default username or password. A new install '
+          'opens /setup to create the admin account. This service speaks '
+          'HTTP, not HTTPS.')
+elif OIDC_ISSUER_URL and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET:
+    if _LEGACY_OIDC_ENV:
+        print('[Auth] NOTE: ' + ', '.join(sorted(set(_LEGACY_OIDC_ENV))) +
+              ' still work but are deprecated. Rename them to the matching '
+              'OIDC_* variables.')
     from authlib.integrations.flask_client import OAuth
     oauth = OAuth(app)
-    oauth.register(
-        name='authentik',
-        client_id=os.environ['AUTHENTIK_CLIENT_ID'],
-        client_secret=os.environ['AUTHENTIK_CLIENT_SECRET'],
-        server_metadata_url=f'{AUTHENTIK_ISSUER_URL}/.well-known/openid-configuration',
-        client_kwargs={'scope': 'openid email profile groups'},
+    oidc_client = oauth.register(
+        name='oidc',
+        client_id=OIDC_CLIENT_ID,
+        client_secret=OIDC_CLIENT_SECRET,
+        server_metadata_url=f'{OIDC_ISSUER_URL}/.well-known/openid-configuration',
+        client_kwargs={'scope': OIDC_SCOPES},
     )
 else:
-    print('[Auth] WARNING: AUTH_MODE=authentik but AUTHENTIK_CLIENT_ID / '
-          'AUTHENTIK_CLIENT_SECRET are not set — nobody can sign in. Configure '
-          'Authentik OIDC, or drop AUTH_MODE to use local accounts instead.')
+    _missing = ' / '.join(
+        name for name, value in (
+            ('OIDC_ISSUER_URL', OIDC_ISSUER_URL),
+            ('OIDC_CLIENT_ID', OIDC_CLIENT_ID),
+            ('OIDC_CLIENT_SECRET', OIDC_CLIENT_SECRET),
+        ) if not value
+    )
+    print(f'[Auth] WARNING: AUTH_MODE=oidc but {_missing} '
+          f'not set — nobody can sign in. Configure your OpenID Connect '
+          f'provider, or drop AUTH_MODE to use local accounts instead.')
 
 
 def _bearer_identity() -> dict | None:
@@ -293,7 +356,7 @@ def _session_account() -> dict | None:
     to take effect now, and a signed cookie would otherwise keep working until
     it expired. Returns None once the account is gone or has lost its password.
 
-    Authentik mode keeps trusting the cookie. Admin there comes from group
+    OIDC mode keeps trusting the cookie. Admin there comes from group
     membership resolved at sign-in, and the local row is a cache of the last
     login rather than the authority, so re-reading it would decide access from
     stale data.
@@ -366,7 +429,7 @@ def _current_username() -> str | None:
 def _setup_required() -> bool:
     """True while local mode has no account anyone can sign in to.
 
-    Only ever True before the first password is set. Authentik mode never needs
+    Only ever True before the first password is set. OIDC mode never needs
     setup: accounts arrive from the identity provider.
     """
     if not LOCAL_AUTH:
@@ -630,7 +693,7 @@ def _login_failed(message: str, status: int, *, retry_after: int | None = None):
 
 @app.route('/login')
 def login():
-    """Login page: a password form in local mode, an SSO button in Authentik mode."""
+    """Login page: a password form in local mode, an SSO button in OIDC mode."""
     if _is_logged_in():
         return redirect(url_for('index'))
     if _setup_required():
@@ -640,8 +703,9 @@ def login():
         return send_from_directory(FRONTEND_DIST, 'index.html')
     return render_template(
         'login.html',
-        sso_enabled=oauth is not None,
+        sso_enabled=oidc_client is not None,
         local_auth=LOCAL_AUTH,
+        oidc_provider_name=OIDC_PROVIDER_NAME,
     )
 
 
@@ -858,9 +922,9 @@ def auth_local_login():
     return redirect(url_for('index'))
 
 
-def _authentik_redirect_uri() -> str:
-    """OIDC callback URL — must match the redirect URI configured in Authentik."""
-    explicit = os.environ.get('AUTHENTIK_REDIRECT_URI', '').strip()
+def _oidc_redirect_uri() -> str:
+    """OIDC callback URL — must match the redirect URI registered with the provider."""
+    explicit = _oidc_env('REDIRECT_URI').strip()
     if explicit:
         return explicit
     public = os.environ.get('PUBLIC_URL', '').strip().rstrip('/')
@@ -871,16 +935,42 @@ def _authentik_redirect_uri() -> str:
 
 @app.route('/auth/login')
 def auth_login():
-    """Redirect the user to Authentik for authentication."""
-    if oauth is None:
+    """Redirect the user to the OpenID Connect provider for authentication."""
+    if oidc_client is None:
         if LOCAL_AUTH:
             # Nothing to redirect to; the password form is on the login page.
             return redirect(url_for('login'))
-        flash('Single sign-on is not configured. Set AUTHENTIK_CLIENT_ID and '
-              'AUTHENTIK_CLIENT_SECRET, or drop AUTH_MODE to use local '
-              'accounts instead.', 'error')
+        flash('Single sign-on is not configured. Set OIDC_ISSUER_URL, '
+              'OIDC_CLIENT_ID and OIDC_CLIENT_SECRET, or drop AUTH_MODE to use '
+              'local accounts instead.', 'error')
         return redirect(url_for('login'))
-    return oauth.authentik.authorize_redirect(_authentik_redirect_uri())
+    return oidc_client.authorize_redirect(_oidc_redirect_uri())
+
+
+def _claim_groups(userinfo: dict) -> set[str]:
+    """Group names out of the configured claim, whatever shape it arrives in.
+
+    Providers disagree: a list of names (Authentik, Authelia), a single
+    space- or comma-separated string, or a list of objects carrying `name` or
+    `path`. Keycloak's path-style groups arrive as `/admins`, so the leading
+    slash is dropped and operators can configure the plain name.
+    """
+    raw = userinfo.get(OIDC_GROUPS_CLAIM)
+    if isinstance(raw, str):
+        items: list = raw.replace(',', ' ').split()
+    elif isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        return set()
+
+    names = set()
+    for item in items:
+        if isinstance(item, dict):
+            item = item.get('name') or item.get('path') or ''
+        text = str(item).strip().lstrip('/')
+        if text:
+            names.add(text)
+    return names
 
 
 def _resolve_oidc_identity(userinfo: dict) -> tuple[str | None, str | None, bool]:
@@ -894,9 +984,12 @@ def _resolve_oidc_identity(userinfo: dict) -> tuple[str | None, str | None, bool
     if not sub:
         return None, None, False
 
-    groups = set(userinfo.get('groups') or [])
-    is_admin = AUTHENTIK_ADMIN_GROUP in groups
-    if not is_admin and AUTHENTIK_USER_GROUP not in groups:
+    groups = _claim_groups(userinfo)
+    is_admin = bool(OIDC_ADMIN_GROUP) and OIDC_ADMIN_GROUP in groups
+    # An empty OIDC_USER_GROUP means "any authenticated user". Providers differ
+    # in whether they can emit groups at all, and demanding one would lock out
+    # everybody on the ones that cannot.
+    if not is_admin and OIDC_USER_GROUP and OIDC_USER_GROUP not in groups:
         auth_log.warning('denied login for sub=%s: groups=%s', sub, sorted(groups))
         return sub, None, False
 
@@ -922,19 +1015,21 @@ def _is_allowed_deep_link(uri: str) -> bool:
     return parts.scheme.lower() in _mobile_deep_link_schemes() and not parts.netloc.startswith('.')
 
 
-def _authentik_token_endpoints() -> tuple[str, str]:
-    """(token_endpoint, userinfo_endpoint), preferring OIDC discovery.
+def _oidc_token_endpoints() -> tuple[str, str]:
+    """(token_endpoint, userinfo_endpoint), from discovery unless overridden.
 
-    Falls back to Authentik's documented layout under the issuer so that app
-    sign-in does not hinge on a second outbound request succeeding mid-redirect.
+    OIDC_TOKEN_ENDPOINT / OIDC_USERINFO_ENDPOINT cover a provider that does not
+    publish a discovery document where authlib looks for it. There is no
+    vendor-shaped guess behind them any more: deriving Authentik's `/token/`
+    layout from, say, a Keycloak issuer turned a clear discovery failure into a
+    puzzling 404 later in the flow.
     """
-    try:
-        meta = oauth.authentik.load_server_metadata()
-        return meta['token_endpoint'], meta['userinfo_endpoint']
-    except Exception as exc:
-        print(f'[MobileAuth] OIDC discovery unavailable ({exc}); '
-              f'falling back to issuer-derived endpoints')
-        return f'{AUTHENTIK_ISSUER_URL}/token/', f'{AUTHENTIK_ISSUER_URL}/userinfo/'
+    token = _oidc_env('TOKEN_ENDPOINT').strip()
+    userinfo = _oidc_env('USERINFO_ENDPOINT').strip()
+    if token and userinfo:
+        return token, userinfo
+    meta = oidc_client.load_server_metadata()
+    return token or meta['token_endpoint'], userinfo or meta['userinfo_endpoint']
 
 
 # The set RFC 6749 §4.1.2.1 defines. Anything outside it is reported
@@ -973,16 +1068,20 @@ def _mobile_oidc_callback(code: str | None, nonce_row: dict):
     if not mobile_auth.mobile_auth_enabled():
         return fail('server_misconfigured', 'JWT_SECRET_KEY is not set')
 
-    token_endpoint, userinfo_endpoint = _authentik_token_endpoints()
+    try:
+        token_endpoint, userinfo_endpoint = _oidc_token_endpoints()
+    except Exception as exc:
+        return fail('server_misconfigured', f'OIDC discovery failed: {exc}')
+
     try:
         token_resp = requests.post(
             token_endpoint,
             data={
                 'grant_type': 'authorization_code',
                 'code': code,
-                'redirect_uri': _authentik_redirect_uri(),
-                'client_id': os.environ['AUTHENTIK_CLIENT_ID'],
-                'client_secret': os.environ['AUTHENTIK_CLIENT_SECRET'],
+                'redirect_uri': _oidc_redirect_uri(),
+                'client_id': OIDC_CLIENT_ID,
+                'client_secret': OIDC_CLIENT_SECRET,
             },
             timeout=15,
         )
@@ -1022,8 +1121,8 @@ def _mobile_oidc_callback(code: str | None, nonce_row: dict):
 
 @app.route('/auth/callback')
 def auth_callback():
-    """Handle the OIDC callback from Authentik."""
-    if oauth is None:
+    """Handle the OIDC callback from the identity provider."""
+    if oidc_client is None:
         return redirect(url_for('login'))
 
     idp_error = request.args.get('error')
@@ -1052,20 +1151,21 @@ def auth_callback():
         return redirect(url_for('login'))
 
     try:
-        token = oauth.authentik.authorize_access_token()
+        token = oidc_client.authorize_access_token()
     except Exception as exc:
         print(f"[Auth] token exchange failed: {exc}")
         flash('Sign-in failed. Please try again.', 'error')
         return redirect(url_for('login'))
 
-    userinfo = token.get('userinfo') or oauth.authentik.parse_id_token(token)
+    userinfo = token.get('userinfo') or oidc_client.parse_id_token(token)
     sub, username, is_admin = _resolve_oidc_identity(userinfo)
     if not sub:
         flash('Sign-in failed: identity provider did not provide a subject claim.', 'error')
         return redirect(url_for('login'))
     if username is None:
         flash('Your account is not authorized to use Pick-a-Recipe. Ask an '
-              'administrator to add you to the appropriate group in Authentik.', 'error')
+              'administrator to add you to the appropriate group in your '
+              'identity provider.', 'error')
         return redirect(url_for('login'))
 
     user = upsert_oidc_user(
@@ -1085,15 +1185,15 @@ def auth_callback():
 
 @app.route('/logout')
 def logout():
-    """Log out: clear the local session and end the Authentik session."""
+    """Log out: clear the local session and end the provider's session too."""
     # Everything, not just the identity keys: a stale share or auto-start left
     # behind would be picked up by whoever signs in next on this browser.
     session.clear()
 
     end_session_url = None
-    if oauth is not None:
+    if oidc_client is not None:
         try:
-            end_session_url = oauth.authentik.load_server_metadata().get('end_session_endpoint')
+            end_session_url = oidc_client.load_server_metadata().get('end_session_endpoint')
         except Exception as exc:
             print(f"[Auth] could not load OIDC metadata for logout: {exc}")
 
@@ -1102,28 +1202,135 @@ def logout():
     return redirect(url_for('login'))
 
 
+def _providers_from_form(form, existing_keys: dict | None = None) -> str:
+    """Rebuild the provider registry from the settings form's repeated fields.
+
+    The plain-HTML settings page posts one parallel list per column rather than
+    JSON, so rows arrive as provider_name[], provider_api_type[] and so on. A
+    row with neither a name nor a model is an empty template row the user never
+    filled in, and is dropped.
+
+    A blank API key keeps the key already stored for that provider. Browsers
+    omit or clear password inputs, and treating that as "delete the key" is
+    how a save used to wipe a provider that the user had just configured.
+    """
+    from ai_providers import AiProvider, serialize_providers, slugify
+
+    names = form.getlist('provider_name[]')
+    api_types = form.getlist('provider_api_type[]')
+    keys = form.getlist('provider_api_key[]')
+    base_urls = form.getlist('provider_base_url[]')
+    models = form.getlist('provider_model[]')
+    ids = form.getlist('provider_id[]')
+    existing_keys = existing_keys or {}
+
+    providers = []
+    seen = set()
+    for index, name in enumerate(names):
+        def _at(values, default=''):
+            return values[index].strip() if index < len(values) else default
+
+        name = name.strip()
+        model = _at(models)
+        if not name and not model:
+            continue
+        provider_id = _at(ids) or slugify(name)
+        if provider_id in seen:
+            provider_id = f'{provider_id}-{index}'
+        seen.add(provider_id)
+        api_key = _at(keys) or existing_keys.get(provider_id, '')
+        providers.append(AiProvider(
+            id=provider_id,
+            name=name or provider_id,
+            api_type=_at(api_types),
+            api_key=api_key,
+            base_url=_at(base_urls),
+            model=model,
+        ))
+    return serialize_providers(providers)
+
+
+@app.route('/api/ai/providers', methods=['GET'])
+@api_admin_required
+def api_ai_providers():
+    """The provider registry, already migrated, plus the dialects to choose from.
+
+    Served rather than derived in the browser so the legacy-settings migration
+    lives in exactly one place.
+    """
+    from dataclasses import asdict
+
+    from ai_providers import _COMPATIBLE_CATALOGS, API_TYPES, load_providers
+
+    return jsonify({
+        'providers': [asdict(p) for p in load_providers()],
+        'api_types': API_TYPES,
+        'compatible_catalogs': _COMPATIBLE_CATALOGS,
+    })
+
+
+@app.route('/api/ai/model-catalog', methods=['GET'])
+@api_admin_required
+def api_model_catalog():
+    """Model-name suggestions for a provider, from models.dev.
+
+    Only ever suggestions: every model field accepts a typed value, so a
+    provider models.dev does not list (a self-hosted gateway, a brand-new
+    release) is still perfectly usable.
+    """
+    from model_catalog import catalog_models
+
+    catalog = (request.args.get('catalog') or '').strip()
+    if not catalog:
+        return jsonify({'models': []})
+    try:
+        return jsonify({'catalog': catalog, 'models': catalog_models(catalog)})
+    except Exception as exc:
+        # A suggestion list is not worth failing the settings page over.
+        app.logger.info('[AI] model catalog unavailable: %s', exc)
+        return jsonify({'models': [], 'error': 'Model suggestions are unavailable.'})
+
+
 @app.route('/settings', methods=['GET', 'POST'])
 @login_required
 def settings():
-    """Settings page for configuration."""
+    """Settings page for configuration.
+
+    A click on Settings stays inside the app and never hits this view. A
+    refresh does, and used to render the old template, so the same URL showed
+    two different layouts. With a built frontend, the refresh gets the app too.
+    """
+    if request.method == 'GET' and os.path.exists(
+            os.path.join(FRONTEND_DIST, 'index.html')):
+        return send_from_directory(FRONTEND_DIST, 'index.html')
+
     config = load_config()
 
     if request.method == 'POST':
-        # Text fields update only when the form actually sent them. Hidden
-        # provider inputs are disabled, so a Gemini save must not wipe the
-        # OpenAI key by treating "absent" as "blank".
+        # Text fields update only when the form actually sent them. A password
+        # input a browser drops must not be stored as a blank key.
+        if 'provider_name[]' in request.form or 'provider_id[]' in request.form:
+            existing_keys = {}
+            try:
+                stored_providers = json.loads(config.get('ai_providers') or '[]')
+            except (TypeError, ValueError):
+                stored_providers = []
+            if isinstance(stored_providers, list):
+                for record in stored_providers:
+                    if isinstance(record, dict) and record.get('id'):
+                        existing_keys[str(record['id'])] = str(record.get('api_key') or '')
+            config['ai_providers'] = _providers_from_form(request.form, existing_keys)
         for key in (
-            'llm_provider',
-            'openai_api_key', 'openai_model',
-            'gemini_api_key', 'gemini_model',
-            'openrouter_api_key', 'openrouter_model',
+            'ai_extraction_provider',
+            'transcription_mode',
+            'transcription_provider',
+            'transcription_model',
             'recipe_lang',
             'mealie_api_key', 'mealie_host',
             'tandoor_api_key', 'tandoor_host',
             'target_language',
             'whisper_model',
             'hf_token',
-            'usda_fdc_api_key',
             'yt_dlp_cookies_file',
             'yt_dlp_cookies_browser',
             'max_concurrent_jobs',
@@ -1133,6 +1340,8 @@ def settings():
         # Checkbox: present in form data only when checked
         config['tandoor_enabled'] = 'true' if request.form.get('tandoor_enabled') else 'false'
         config['mealie_enabled'] = 'true' if request.form.get('mealie_enabled') else 'false'
+        config['nutrition_lookup_enabled'] = 'true' if request.form.get(
+            'nutrition_lookup_enabled') else 'false'
         config['confirm_before_upload'] = 'true' if request.form.get(
             'confirm_before_upload') else 'false'
 
@@ -1141,10 +1350,15 @@ def settings():
         flash('Settings saved successfully!', 'success')
         return redirect(url_for('settings'))
 
+    from ai_providers import _COMPATIBLE_CATALOGS, API_TYPES, load_providers
+
     return render_template(
         'settings.html',
         config=config,
         max_concurrent=resolve_max_concurrent(),
+        api_types=API_TYPES,
+        compatible_catalogs=_COMPATIBLE_CATALOGS,
+        ai_providers=load_providers(),
     )
 
 
@@ -1611,7 +1825,10 @@ def api_auth_status():
     return jsonify({
         'auth_mode': AUTH_MODE,
         'local_auth_enabled': LOCAL_AUTH,
-        'sso_enabled': oauth is not None,
+        'sso_enabled': oidc_client is not None,
+        # So clients can label the button "Sign in with Keycloak" rather than
+        # naming whichever provider this app happened to be built against.
+        'sso_provider_name': OIDC_PROVIDER_NAME,
         # True only before the first account exists, so a client can send the
         # user to setup instead of a sign-in form nobody can satisfy yet.
         'setup_required': _setup_required(),
@@ -1622,7 +1839,7 @@ def api_auth_status():
 
 # ===== Mobile (Android app) auth =====
 # Two ways in, matching the two AUTH_MODEs. Under `local` the app posts a
-# username and password straight to /api/mobile/auth/login. Under `authentik`
+# username and password straight to /api/mobile/auth/login. Under `oidc`
 # the app cannot hold the OIDC client secret, so it opens the system browser and
 # the server completes the code exchange, handing back a JWT pair over a
 # custom-scheme deep link. Both are disabled unless JWT_SECRET_KEY is set.
@@ -1631,15 +1848,16 @@ def api_auth_status():
 def api_mobile_password_login():
     """Exchange a username and password for a token pair.
 
-    Only under AUTH_MODE=local. Under Authentik the password, if an account even
-    has one, is not what governs access — group membership is — so accepting one
+    Only under AUTH_MODE=local. Under OIDC the password, if an account even has
+    one, is not what governs access — group membership is — so accepting one
     here would be a way around single sign-on.
     """
     if not mobile_auth.mobile_auth_enabled():
         return jsonify({'error': 'Mobile auth is not configured. Set JWT_SECRET_KEY.'}), 503
     if not LOCAL_AUTH:
         return jsonify({
-            'error': 'This server uses single sign-on. Sign in with Authentik.',
+            'error': f'This server uses single sign-on. Sign in with '
+                     f'{OIDC_PROVIDER_NAME}.',
         }), 400
     if _setup_required():
         return jsonify({
@@ -1668,10 +1886,10 @@ def api_mobile_password_login():
 
 @app.route('/api/mobile/auth/login-url', methods=['GET'])
 def api_mobile_login_url():
-    """Start app sign-in: return the Authentik URL to open in the browser."""
+    """Start app sign-in: return the provider URL to open in the browser."""
     if not mobile_auth.mobile_auth_enabled():
         return jsonify({'error': 'Mobile auth is not configured. Set JWT_SECRET_KEY.'}), 503
-    if oauth is None:
+    if oidc_client is None:
         return jsonify({'error': 'Single sign-on is not configured on this server.'}), 503
 
     redirect_uri = (request.args.get('redirect') or '').strip()
@@ -1682,12 +1900,17 @@ def api_mobile_login_url():
     if not save_mobile_nonce(nonce, redirect_uri):
         return jsonify({'error': 'Could not start sign-in. Please try again.'}), 500
 
-    meta = oauth.authentik.load_server_metadata()
+    try:
+        meta = oidc_client.load_server_metadata()
+    except Exception as exc:
+        print(f'[MobileAuth] OIDC discovery failed: {exc}')
+        return jsonify({'error': 'Single sign-on is misconfigured on this server.'}), 503
+
     params = {
         'response_type': 'code',
-        'client_id': os.environ['AUTHENTIK_CLIENT_ID'],
-        'redirect_uri': _authentik_redirect_uri(),
-        'scope': 'openid email profile groups',
+        'client_id': OIDC_CLIENT_ID,
+        'redirect_uri': _oidc_redirect_uri(),
+        'scope': OIDC_SCOPES,
         'state': nonce,
     }
     return jsonify({
@@ -1728,7 +1951,7 @@ def api_mobile_me():
 
 # ===== User administration =====
 #
-# Local mode only. Under Authentik the identity provider owns accounts: it
+# Local mode only. Under OIDC the identity provider owns accounts: it
 # decides who exists, group membership decides who administers, and both are
 # reapplied at every sign-in — so creating an account here would be unusable
 # (password sign-in is refused), and deleting one would not keep anyone out.
@@ -1926,6 +2149,12 @@ def api_post_config():
     filtered = {k: v for k, v in data.items() if k in valid_keys}
     if not filtered:
         return jsonify({'error': 'No valid configuration keys provided'}), 400
+    if 'ai_providers' in filtered:
+        # Normalise before storing: a malformed registry would otherwise only
+        # surface much later, as an extraction that cannot find its provider.
+        from ai_providers import parse_providers, serialize_providers
+        filtered['ai_providers'] = serialize_providers(
+            parse_providers(filtered['ai_providers']))
     current = load_config()
     current.update(filtered)
     save_config(current)
@@ -2220,7 +2449,20 @@ def cancel_pending_upload_api(upload_id):
                     'job_id': result.get('job_id')})
 
 
-# ===== Legacy API (kept for backward compatibility) =====
+# ===== Push notifications =====
+
+@app.route('/api/push/vapid-key', methods=['GET'])
+@api_login_required
+def push_vapid_key():
+    """Public half of the VAPID pair, for PushManager.subscribe().
+
+    Public by design: this is the applicationServerKey every subscribing
+    browser has to see. An empty string means notifications are unavailable on
+    this install (pywebpush missing, or the generated key could not be saved),
+    which the UI explains instead of offering a toggle that cannot work.
+    """
+    return jsonify({'key': push.get_public_key()})
+
 
 @app.route('/api/push/subscribe', methods=['POST'])
 @api_login_required
@@ -2231,7 +2473,11 @@ def push_subscribe():
     keys = sub.get('keys') or {}
     if not endpoint or not keys.get('p256dh') or not keys.get('auth'):
         return jsonify({'error': 'Invalid subscription'}), 400
-    ok = save_push_subscription(session['user'], endpoint, keys['p256dh'], keys['auth'])
+    # _current_username() rather than session['user']: api_login_required also
+    # accepts a Bearer token, and the Android app has no session cookie to read.
+    ok = save_push_subscription(
+        _current_username(), endpoint, keys['p256dh'], keys['auth']
+    )
     return jsonify({'status': 'subscribed' if ok else 'error'})
 
 
@@ -2241,9 +2487,13 @@ def push_unsubscribe():
     data = request.get_json() or {}
     endpoint = data.get('endpoint')
     if endpoint:
-        delete_push_subscription(endpoint)
+        # Scoped to the caller: the endpoint arrives in the request body, so an
+        # unscoped delete would let any signed-in user silence another's device.
+        delete_push_subscription(endpoint, username=_current_username())
     return jsonify({'status': 'unsubscribed'})
 
+
+# ===== Legacy API (kept for backward compatibility) =====
 
 @app.route('/api/process', methods=['POST'])
 @api_login_required

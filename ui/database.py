@@ -232,7 +232,7 @@ def upsert_oidc_user(
     avatar_url: Optional[str] = None,
     is_admin: bool = False,
 ) -> Dict[str, Any]:
-    """Create or refresh the local cache record for an OIDC (Authentik) user.
+    """Create or refresh the local cache record for a single-sign-on user.
 
     Users are identified by their stable OIDC subject (`sub`). On first login a
     unique username is derived from preferred_username/email; if taken by a
@@ -274,7 +274,7 @@ def upsert_oidc_user(
 def ensure_local_user(username: str, *, is_admin: bool = True) -> Dict[str, Any]:
     """Create or return a local account, without setting a password.
 
-    Carries no OIDC subject, so enabling Authentik later cannot collide with it:
+    Carries no OIDC subject, so enabling single sign-on later cannot collide with it:
     `upsert_oidc_user` only ever matches rows by `oidc_sub`. An account left
     without a password cannot be signed into; `set_user_password` completes it.
     """
@@ -1510,10 +1510,26 @@ def get_push_subscriptions(username: str) -> List[Dict[str, Any]]:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def delete_push_subscription(endpoint: str) -> bool:
+def delete_push_subscription(endpoint: str, username: Optional[str] = None) -> bool:
+    """Remove a push subscription, optionally scoped to its owner.
+
+    Endpoints arrive from the client, so the HTTP path must always pass a
+    username -- without it any signed-in user could unsubscribe someone else's
+    device by quoting their endpoint. The unscoped form is for server-side
+    pruning, where the endpoint was read out of this table to begin with.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute('DELETE FROM push_subscriptions WHERE endpoint = ?', (endpoint,))
+        if username is None:
+            cursor.execute(
+                'DELETE FROM push_subscriptions WHERE endpoint = ?',
+                (endpoint,),
+            )
+        else:
+            cursor.execute(
+                'DELETE FROM push_subscriptions WHERE endpoint = ? AND username = ?',
+                (endpoint, username),
+            )
         conn.commit()
         return cursor.rowcount > 0
 

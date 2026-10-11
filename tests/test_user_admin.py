@@ -480,7 +480,7 @@ class TestChangePasswordThrottling(unittest.TestCase):
         self.assertIn(429, self.res['statuses'])
 
 
-class TestAuthentikModeRefusesUserAdmin(unittest.TestCase):
+class TestOidcModeRefusesUserAdmin(unittest.TestCase):
     """Under SSO the identity provider owns accounts, so local CRUD is a lie.
 
     Creating an account here could not sign in (password login is refused), and
@@ -519,8 +519,8 @@ class TestAuthentikModeRefusesUserAdmin(unittest.TestCase):
                 own_password_status=own_password.status_code,
                 boss_survives=database.get_user('boss') is not None,
             )
-        """), AUTH_MODE='authentik',
-            AUTHENTIK_CLIENT_ID='id', AUTHENTIK_CLIENT_SECRET='secret'))
+        """), AUTH_MODE='oidc', OIDC_ISSUER_URL='https://idp.example.test',
+            OIDC_CLIENT_ID='id', OIDC_CLIENT_SECRET='secret'))
 
     def test_listing_still_works_for_visibility(self):
         self.assertEqual(self.res['listed_status'], 200)
@@ -536,52 +536,61 @@ class TestAuthentikModeRefusesUserAdmin(unittest.TestCase):
 
 
 class TestProviderSettingsAreNotWiped(unittest.TestCase):
-    """Saving one provider must leave the other providers' keys in place.
+    """A settings save must not blank a provider key the browser did not send.
 
-    The legacy form disables the fields of the providers you are not editing.
-    Those fields are then absent from the post, and absence must not be stored
-    as a blank key.
+    Password fields are often posted empty. That is not the same as the user
+    deleting the key, so the stored key for that provider stays.
     """
 
     @classmethod
     def setUpClass(cls):
         cls.res = _run_local("""
+            import json
             admin, _user = seed()
             seeded = admin.post('/api/config', json={
-                'llm_provider': 'gemini',
+                'ai_providers': json.dumps([{
+                    'id': 'gemini',
+                    'name': 'Gemini',
+                    'api_type': 'gemini',
+                    'api_key': 'gemini-test-key',
+                    'base_url': '',
+                    'model': 'gemini-2.5-flash',
+                }]),
                 'gemini_api_key': 'gemini-test-key',
-                'gemini_model': 'gemini-2.5-flash',
-                'openai_api_key': 'openai-test-key',
             })
-            # Only the OpenAI fields are posted, the way the form does once
-            # Gemini's inputs are disabled.
+            # The provider row is posted, but the password input arrived blank.
             saved = admin.post('/settings', data={
-                'llm_provider': 'openai',
-                'openai_api_key': 'openai-test-key',
-                'openai_model': 'gpt-4o',
                 'recipe_lang': 'hebrew',
                 'target_language': 'he',
                 'whisper_model': 'small',
                 'max_concurrent_jobs': '3',
+                'provider_id[]': 'gemini',
+                'provider_name[]': 'Gemini',
+                'provider_api_type[]': 'gemini',
+                'provider_api_key[]': '',
+                'provider_base_url[]': '',
+                'provider_model[]': 'gemini-2.5-flash',
             })
             config = database.load_config()
+            stored = json.loads(config.get('ai_providers') or '[]')
+            kept = next((p for p in stored if p.get('id') == 'gemini'), {})
             emit(
                 seeded_status=seeded.status_code,
                 saved_status=saved.status_code,
-                provider=config.get('llm_provider'),
+                recipe_lang=config.get('recipe_lang'),
                 gemini_api_key=config.get('gemini_api_key'),
-                gemini_model=config.get('gemini_model'),
-                openai_model=config.get('openai_model'),
+                provider_key=kept.get('api_key'),
+                provider_model=kept.get('model'),
             )
         """)
 
-    def test_form_save_keeps_the_hidden_provider_key(self):
+    def test_form_save_keeps_a_blank_posted_provider_key(self):
         self.assertEqual(self.res['seeded_status'], 200)
         self.assertIn(self.res['saved_status'], (200, 302))
-        self.assertEqual(self.res['provider'], 'openai')
+        self.assertEqual(self.res['recipe_lang'], 'hebrew')
         self.assertEqual(self.res['gemini_api_key'], 'gemini-test-key')
-        self.assertEqual(self.res['gemini_model'], 'gemini-2.5-flash')
-        self.assertEqual(self.res['openai_model'], 'gpt-4o')
+        self.assertEqual(self.res['provider_key'], 'gemini-test-key')
+        self.assertEqual(self.res['provider_model'], 'gemini-2.5-flash')
 
 
 if __name__ == '__main__':

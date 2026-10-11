@@ -217,15 +217,15 @@ class TestDisabledSurfaces(unittest.TestCase):
             emit(status=resp.status_code,
                  error=resp.get_json().get('error'),
                  has_token='access_token' in resp.get_json())
-        """, AUTH_MODE='authentik',
-             AUTHENTIK_CLIENT_ID='cid', AUTHENTIK_CLIENT_SECRET='secret')
+        """, AUTH_MODE='oidc', OIDC_ISSUER_URL='https://idp.example.test',
+             OIDC_CLIENT_ID='cid', OIDC_CLIENT_SECRET='secret')
 
     def test_without_a_signing_key_it_is_unavailable(self):
         self.assertFalse(self.without_secret['enabled'])
         self.assertEqual(self.without_secret['status'], 503)
         self.assertIn('JWT_SECRET_KEY', self.without_secret['error'])
 
-    def test_under_authentik_a_password_is_refused(self):
+    def test_under_sso_a_password_is_refused(self):
         # Group membership governs access there, not the password an account may
         # happen to carry, so honouring one would go around single sign-on.
         self.assertEqual(self.under_sso['status'], 400)
@@ -247,8 +247,8 @@ class TestStatusTellsTheAppWhichWayIn(unittest.TestCase):
 
         cls.sso = _run_mobile("""
             emit(status=app.test_client().get('/api/auth/status').get_json())
-        """, AUTH_MODE='authentik',
-             AUTHENTIK_CLIENT_ID='cid', AUTHENTIK_CLIENT_SECRET='secret')
+        """, AUTH_MODE='oidc', OIDC_ISSUER_URL='https://idp.example.test',
+             OIDC_CLIENT_ID='cid', OIDC_CLIENT_SECRET='secret')
 
     def test_status_is_readable_without_a_session(self):
         # It has to be: it is what the app asks before it has any credential.

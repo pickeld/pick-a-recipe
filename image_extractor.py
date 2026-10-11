@@ -6,7 +6,7 @@ Uses LLM vision to analyze frames and select the most appealing shot of the fini
 import os
 import subprocess
 import shutil
-from llm_providers import get_image_selector
+from frame_selector import select_best_frame
 from helpers import setup_logger
 
 logger = setup_logger(__name__)
@@ -46,8 +46,7 @@ class ImageExtractor:
         # Use LLM to select the best frame
         try:
             logger.info(f"[Extract Image] Using LLM to select best frame from {len(frames)} candidates...")
-            selector = get_image_selector()
-            best_frame_idx = selector.select_best_frame(frames)
+            best_frame_idx = select_best_frame(frames)
             logger.info(f"[Extract Image] LLM selected frame index: {best_frame_idx}")
         except Exception as e:
             logger.error(f"[Extract Image] LLM selection failed: {e}")
@@ -196,9 +195,8 @@ def extract_dish_image_candidates(video_path: str, num_candidates: int = 12) -> 
     
     # Use LLM to select the best frame
     try:
-        from llm_providers import get_image_selector
-        selector = get_image_selector()
-        best_frame_idx = selector.select_best_frame(frames)
+        from frame_selector import select_best_frame
+        best_frame_idx = select_best_frame(frames)
     except Exception as e:
         logger.error(f"LLM selection failed: {e}")
         best_frame_idx = len(frames) - 1  # Fallback to last frame

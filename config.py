@@ -74,6 +74,20 @@ migrate_legacy_database()
 
 # Default configuration values
 DEFAULT_CONFIG = {
+    # JSON array of AI provider records; see ai_providers.py. Empty on an
+    # install predating it, which derives an equivalent list from the
+    # llm_provider / *_api_key / *_model settings below.
+    "ai_providers": "",
+    "ai_extraction_provider": "",
+    # Speech-to-text: 'local' runs faster-whisper on this machine, 'provider'
+    # posts the audio to one of the configured AI providers, 'off' skips audio
+    # and builds the recipe from on-screen text. 'off' never loads Whisper,
+    # which matters on a small machine where the model takes the process down.
+    "transcription_mode": "local",
+    "transcription_provider": "",
+    "transcription_model": "whisper-1",
+    # Superseded by ai_providers, kept so an existing install still boots with
+    # the provider it was set up with.
     "llm_provider": "openai",
     "openai_api_key": "",
     "openai_model": "gpt-5-mini-2025-08-07",
@@ -92,10 +106,15 @@ DEFAULT_CONFIG = {
     "whisper_model": "small",
     "confirm_before_upload": "true",
     "hf_token": "",
-    "usda_fdc_api_key": "",
+    "nutrition_lookup_enabled": "true",
     "yt_dlp_cookies_file": "",
     "yt_dlp_cookies_browser": "",
     "max_concurrent_jobs": "3",
+    # Web Push signing pair. Never edited in Settings and never committed:
+    # ui/push.py generates one on first use, or reads it from the environment.
+    "vapid_public_key": "",
+    "vapid_private_key": "",
+    "vapid_subject": "",
 }
 
 
@@ -202,7 +221,33 @@ class Config:
         return default
 
     @property
+    def AI_PROVIDERS(self) -> str:
+        """Raw JSON for the provider registry; parsed by ai_providers.py."""
+        return self._get('ai_providers', DEFAULT_CONFIG['ai_providers'])
+
+    @property
+    def AI_EXTRACTION_PROVIDER(self) -> str:
+        """Id of the provider used to turn raw content into a recipe."""
+        return self._get('ai_extraction_provider',
+                         DEFAULT_CONFIG['ai_extraction_provider'])
+
+    @property
+    def TRANSCRIPTION_MODE(self) -> str:
+        mode = self._get('transcription_mode', DEFAULT_CONFIG['transcription_mode'])
+        return mode if mode in ('local', 'provider', 'off') else 'local'
+
+    @property
+    def TRANSCRIPTION_PROVIDER(self) -> str:
+        return self._get('transcription_provider',
+                         DEFAULT_CONFIG['transcription_provider'])
+
+    @property
+    def TRANSCRIPTION_MODEL(self) -> str:
+        return self._get('transcription_model', DEFAULT_CONFIG['transcription_model'])
+
+    @property
     def LLM_PROVIDER(self) -> str:
+        """Pre-registry provider choice. Only read when migrating."""
         return self._get('llm_provider', DEFAULT_CONFIG['llm_provider'])
 
     @property
@@ -274,16 +319,14 @@ class Config:
         return self._get('hf_token', DEFAULT_CONFIG['hf_token'])
 
     @property
-    def USDA_FDC_API_KEY(self) -> str:
-        """USDA FoodData Central key from Settings, else USDA_FDC_API_KEY env.
+    def NUTRITION_LOOKUP_ENABLED(self) -> bool:
+        """Whether to ask Open Food Facts about ingredients the table misses.
 
-        Never hardcoded. Empty Settings falls through to the environment so
-        Docker operators can keep using env-only configuration.
+        On by default: the lookup needs no API key and no account, so the only
+        cost is an outbound request. Turn it off for a fully offline instance.
         """
-        stored = self._get('usda_fdc_api_key', DEFAULT_CONFIG['usda_fdc_api_key'])
-        if stored:
-            return stored
-        return (os.environ.get('USDA_FDC_API_KEY') or '').strip()
+        return _truthy(self._get('nutrition_lookup_enabled',
+                                 DEFAULT_CONFIG['nutrition_lookup_enabled']))
 
     @property
     def YT_DLP_COOKIES_FILE(self) -> str:
@@ -292,6 +335,23 @@ class Config:
     @property
     def YT_DLP_COOKIES_BROWSER(self) -> str:
         return self._get('yt_dlp_cookies_browser', DEFAULT_CONFIG['yt_dlp_cookies_browser'])
+
+    @property
+    def VAPID_PUBLIC_KEY(self) -> str:
+        return self._get('vapid_public_key', DEFAULT_CONFIG['vapid_public_key'])
+
+    @property
+    def VAPID_PRIVATE_KEY(self) -> str:
+        """Web Push signing key. Generated at runtime, never hardcoded.
+
+        ui/push.py owns creation and prefers VAPID_PRIVATE_KEY from the
+        environment, falling back to this stored value.
+        """
+        return self._get('vapid_private_key', DEFAULT_CONFIG['vapid_private_key'])
+
+    @property
+    def VAPID_SUBJECT(self) -> str:
+        return self._get('vapid_subject', DEFAULT_CONFIG['vapid_subject'])
 
     @property
     def MAX_CONCURRENT_JOBS(self) -> int:

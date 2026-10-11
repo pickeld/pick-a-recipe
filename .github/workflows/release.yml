@@ -1,0 +1,238 @@
+# Cuts a release for every push to main that changes something users notice.
+#
+# Until now releases were made by hand, which is why the tags lag behind main
+# and CHANGELOG.md stopped at 1.4.0. This workflow takes over the mechanical
+# part: work out the next version, write the notes from the commits, publish
+# the release, and ask release-apk.yml for a matching APK.
+#
+# Version numbers come from the commit subjects, which already follow
+# Conventional Commits in this repo:
+#
+#   feat: ...                  minor bump   1.7.0 -> 1.8.0
+#   fix: / perf: / anything
+#     else with a subject                   patch bump   1.7.0 -> 1.7.1
+#   feat!: / BREAKING CHANGE:  major bump   1.7.0 -> 2.0.0
+#   chore: ci: docs: test:
+#     style:                   no bump — housekeeping nobody installs an
+#                              update for
+#
+# A push carrying only housekeeping commits publishes nothing, so a run of
+# dependency bumps does not burn a version number. The previous version is
+# read from the newest v* tag; nothing in the tree records it.
+#
+# This runs after CI rather than directly on push, so a commit that breaks the
+# tests never becomes a tagged release. `workflow_run` only fires for workflow
+# files that exist on the default branch — this file has no effect until it is
+# merged to main.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Work out the version and the notes, but publish nothing'
+        type: boolean
+        default: false
+
+# Serial, not cancelling: two pushes landing together must produce two
+# releases, and the second has to see the tag the first created.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the tag and the release
+  actions: write # dispatch release-apk.yml for the new tag
+
+jobs:
+  release:
+    name: Tag and publish
+    runs-on: ubuntu-latest
+    # CI also runs on pull requests, and fails as often as it passes; only a
+    # green run on a push to main is worth releasing.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A workflow_run job checks out the default branch tip, which is not
+          # necessarily the commit CI just went green on — main may have moved.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # Full history and tags: both the bump and the notes are derived
+          # from every commit since the last v* tag, and the tag is the only
+          # place the previous version is recorded.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Work out the version and the notes
+        id: plan
+        run: |
+          set -euo pipefail
+
+          SHA=$(git rev-parse HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+          # Re-running this workflow on a commit that already has a version
+          # tag would otherwise publish the same code twice.
+          if git tag --points-at "$SHA" | grep -qE '^v[0-9]'; then
+            echo "::notice::$SHA is already released as $(git tag --points-at "$SHA" | grep -E '^v[0-9]' | head -1)"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # --match keeps non-version tags such as recovered-wip-* out of it.
+          # The describe can miss a tag that is not an ancestor of HEAD (a
+          # release cut on a side branch, say), so fall back to the highest
+          # version tag in the repo rather than restarting from zero.
+          LAST_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$SHA" 2>/dev/null || true)
+          if [[ -z "$LAST_TAG" ]]; then
+            LAST_TAG=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1)
+          fi
+          echo "Previous release: ${LAST_TAG:-none}"
+
+          RANGE="${LAST_TAG:+$LAST_TAG..}$SHA"
+
+          # Types that describe work on the project rather than on the app.
+          SILENT='chore|ci|docs|test|style'
+
+          bump=none
+          features=()
+          fixes=()
+          other=()
+
+          while IFS=$'\t' read -r short subject; do
+            type=''
+            scope=''
+            breaking=''
+            desc=$subject
+            if [[ $subject =~ ^([a-zA-Z]+)(\(([^\)]+)\))?(!)?:[[:space:]]*(.+)$ ]]; then
+              type=$(tr '[:upper:]' '[:lower:]' <<<"${BASH_REMATCH[1]}")
+              scope=${BASH_REMATCH[3]}
+              breaking=${BASH_REMATCH[4]}
+              desc=${BASH_REMATCH[5]}
+            fi
+
+            # Under Features and Fixes the type prefix is dropped, since the
+            # heading already says it, but the scope stays: "chef" or "mobile"
+            # tells a reader which part of the app moved. Other changes mixes
+            # ci, docs, perf and the rest, so there the type earns its place —
+            # without it "readme" is a line with no context.
+            case $type in
+              feat) features+=("- ${scope:+**$scope**: }$desc ($short)") ;;
+              fix) fixes+=("- ${scope:+**$scope**: }$desc ($short)") ;;
+              '') other+=("- $desc ($short)") ;;
+              *) other+=("- **$type${scope:+($scope)}**: $desc ($short)") ;;
+            esac
+
+            if [[ -n $breaking ]]; then
+              bump=major
+            elif [[ $type == feat && $bump != major ]]; then
+              bump=minor
+            elif [[ ! $type =~ ^($SILENT)$ && $bump == none ]]; then
+              bump=patch
+            fi
+          done < <(git log --no-merges --reverse --format='%h%x09%s' "$RANGE")
+
+          # The footer form, for commits that describe the break in the body
+          # instead of with a ! on the subject.
+          if git log --format='%B' "$RANGE" | grep -qE '^BREAKING[ -]CHANGE:'; then
+            bump=major
+          fi
+
+          if [[ $bump == none ]]; then
+            echo "::notice::Only housekeeping commits since ${LAST_TAG:-the start} — no release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          IFS=. read -r MAJOR MINOR PATCH <<<"${LAST_TAG#v}"
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+          case $bump in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+          TAG="v$MAJOR.$MINOR.$PATCH"
+
+          {
+            if ((${#features[@]})); then
+              printf '### New features\n\n'
+              printf '%s\n' "${features[@]}"
+              printf '\n'
+            fi
+            if ((${#fixes[@]})); then
+              printf '### Fixes\n\n'
+              printf '%s\n' "${fixes[@]}"
+              printf '\n'
+            fi
+            if ((${#other[@]})); then
+              printf '### Other changes\n\n'
+              printf '%s\n' "${other[@]}"
+              printf '\n'
+            fi
+            if [[ -n $LAST_TAG ]]; then
+              printf '**Full changelog**: %s/%s/compare/%s...%s\n' \
+                "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$LAST_TAG" "$TAG"
+            fi
+          } > notes.md
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Repeated in the run summary so a dry run, or a release that looks
+          # wrong afterwards, can be read without opening the log.
+          {
+            printf '## %s (%s bump from %s)\n\n' "$TAG" "$bump" "${LAST_TAG:-nothing}"
+            cat notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the release
+        if: steps.plan.outputs.release == 'true' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          SHA: ${{ steps.plan.outputs.sha }}
+        # --target pins the tag to the commit CI tested, not to wherever main
+        # has drifted to while this job was queued.
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SHA" \
+            --title "$TAG" \
+            --notes-file notes.md
+
+      - name: Build the APK for the new release
+        # A release created with GITHUB_TOKEN does not emit `release:
+        # published` — GitHub suppresses those events so workflows cannot
+        # trigger each other in a loop — so release-apk.yml would never notice
+        # this release. workflow_dispatch is one of the few events exempt from
+        # that rule, so ask for the build by hand instead. --ref the new tag so
+        # the APK is built from exactly the code that was released.
+        #
+        # Deliberately not `needs`-style blocking: the APK builds on the srv2
+        # runner and can take a while, and a queued or offline runner should
+        # not hold up a release that is already published.
+        if: steps.plan.outputs.release == 'true' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          gh workflow run release-apk.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$TAG" \
+            -f tag="$TAG"

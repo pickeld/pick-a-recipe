@@ -22,13 +22,13 @@ sys.path.insert(0, os.path.join(ROOT, 'ui'))
 _test_dir = tempfile.mkdtemp()
 os.environ['DATA_DIR'] = _test_dir
 # Explicit: app-based sign-in goes through the identity provider, which is only
-# registered in authentik mode. Relying on the default would tie these tests to
+# registered in oidc mode. Relying on the default would tie these tests to
 # whatever that default happens to be.
-os.environ['AUTH_MODE'] = 'authentik'
+os.environ['AUTH_MODE'] = 'oidc'
 os.environ.setdefault('JWT_SECRET_KEY', 'unit-test-secret-key')
-os.environ.setdefault('AUTHENTIK_CLIENT_ID', 'test-client-id')
-os.environ.setdefault('AUTHENTIK_CLIENT_SECRET', 'test-client-secret')
-os.environ.setdefault('AUTHENTIK_ISSUER_URL', 'https://auth.example.test/application/o/pick-a-recipe')
+os.environ['OIDC_CLIENT_ID'] = 'test-client-id'
+os.environ['OIDC_CLIENT_SECRET'] = 'test-client-secret'
+os.environ['OIDC_ISSUER_URL'] = 'https://auth.example.test/application/o/pick-a-recipe'
 
 _META = {
     'authorization_endpoint': 'https://auth.example.test/authorize',
@@ -115,7 +115,7 @@ class TestJwtInfrastructure(MobileAuthTestCase):
 class TestMobileEndpoints(MobileAuthTestCase):
     def test_login_url_shape(self):
         client = self._client()
-        with mock.patch.object(self.app_module.oauth.authentik, 'load_server_metadata', return_value=_META):
+        with mock.patch.object(self.app_module.oidc_client, 'load_server_metadata', return_value=_META):
             resp = client.get('/api/mobile/auth/login-url?redirect=par://auth/callback')
         self.assertEqual(resp.status_code, 200)
         body = resp.get_json()
@@ -184,7 +184,8 @@ class TestMobileCallback(MobileAuthTestCase):
             'token_type': 'Bearer',
             'id_token': 'fake-id-token',
         }
-        with mock.patch.object(self.app_module.requests, 'post', return_value=_FakeResponse(token_payload)), \
+        with mock.patch.object(self.app_module.oidc_client, 'load_server_metadata', return_value=_META), \
+             mock.patch.object(self.app_module.requests, 'post', return_value=_FakeResponse(token_payload)), \
              mock.patch.object(self.app_module.requests, 'get', return_value=_FakeResponse(_USERINFO)):
             resp = client.get(f'/auth/callback?code=real-code&state={nonce}')
         self.assertEqual(resp.status_code, 302)

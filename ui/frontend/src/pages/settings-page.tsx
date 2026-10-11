@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -18,11 +18,12 @@ import {
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
-import { mergeLiveValues } from '@/lib/settings-form'
-import type { AppConfig } from '@/types'
+import type { AiProvider, AppConfig } from '@/types'
 import { useSession } from '@/hooks/use-session'
 import { AccountCard } from '@/components/settings/account-card'
+import { NotificationsCard } from '@/components/settings/notifications-card'
 import { UsersCard } from '@/components/settings/users-card'
+import { AiProvidersCard } from '@/components/settings/ai-providers-card'
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -49,6 +50,44 @@ import {
 } from '@/components/ui/alert-dialog'
 
 type Draft = Partial<AppConfig>
+
+// The dialects that expose an OpenAI-compatible /audio/transcriptions endpoint.
+const AUDIO_API_TYPES = ['openai', 'openai-compatible']
+
+/** Picks one of the configured providers by id, showing its name. */
+function ProviderPicker({
+  providers,
+  value,
+  onChange,
+  emptyLabel = 'No provider configured',
+}: {
+  providers: AiProvider[]
+  value: string
+  onChange: (value: string) => void
+  emptyLabel?: string
+}) {
+  const named = providers.filter(p => p.name.trim())
+  if (named.length === 0) {
+    return <p className="text-sm text-muted-foreground">{emptyLabel}</p>
+  }
+  // A provider that was renamed or removed leaves the saved id pointing
+  // nowhere; falling back to the first keeps the select from rendering blank.
+  const current = named.some(p => p.id === value) ? value : named[0].id
+  return (
+    <Select value={current} onValueChange={onChange}>
+      <SelectTrigger className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {named.map(provider => (
+          <SelectItem key={provider.id} value={provider.id}>
+            {provider.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
 
 function useDraft(loaded: AppConfig | undefined) {
   const [draft, setDraft] = useState<Draft>({})
@@ -85,61 +124,6 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
   )
 }
 
-function useLiveFields() {
-  const refs = useRef(new Map<string, HTMLInputElement>())
-  const binders = useRef(new Map<string, (el: HTMLInputElement | null) => void>())
-
-  function bind(field: string) {
-    let binder = binders.current.get(field)
-    if (!binder) {
-      binder = (el) => {
-        if (el) refs.current.set(field, el)
-        else refs.current.delete(field)
-      }
-      binders.current.set(field, binder)
-    }
-    return binder
-  }
-
-  function read(): Record<string, string | undefined> {
-    const live: Record<string, string | undefined> = {}
-    for (const [key, el] of refs.current) live[key] = el.value
-    return live
-  }
-
-  return { bind, read }
-}
-
-function LiveInput({
-  field,
-  formGeneration,
-  defaultValue,
-  onEdit,
-  bind,
-  ...props
-}: {
-  field: string
-  formGeneration: number
-  defaultValue: string
-  onEdit: (value: string) => void
-  bind: (field: string) => (el: HTMLInputElement | null) => void
-} & Omit<React.ComponentProps<typeof Input>, 'value' | 'defaultValue' | 'onChange' | 'name'>) {
-  return (
-    <Input
-      key={`${field}-${formGeneration}`}
-      name={field}
-      ref={bind(field)}
-      defaultValue={defaultValue}
-      {...props}
-      autoComplete="off"
-      onInput={(e) => onEdit(e.currentTarget.value)}
-      onAnimationStart={(e) => {
-        if (e.animationName === 'onAutoFillStart') onEdit(e.currentTarget.value)
-      }}
-    />
-  )
-}
-
 export function SettingsPage() {
   const queryClient = useQueryClient()
   const { data: session, isLoading: sessionLoading } = useSession()
@@ -151,15 +135,22 @@ export function SettingsPage() {
     queryFn: () => api.getConfig(),
     // Instance configuration holds the API keys, so the server refuses it to
     // non-admins. Not asking avoids a pointless 403 on every visit.
-    // Leave a half-edited form alone when the window regains focus. A refetch
-    // would otherwise paint saved values back over fields the user is filling.
     enabled: isAdmin,
-    refetchOnWindowFocus: false,
   })
 
   const { get, set, reset, draft, dirty } = useDraft(loaded)
-  const liveFields = useLiveFields()
-  const [formGeneration, setFormGeneration] = useState(0)
+
+  const [providers, setProvidersState] = useState<AiProvider[] | null>(null)
+
+  const setProviders = useCallback(
+    (next: AiProvider[]) => {
+      // Adopting the server's registry on first render is not an edit, so
+      // only a later change marks the form dirty and gets saved.
+      if (providers !== null) set('ai_providers', JSON.stringify(next))
+      setProvidersState(next)
+    },
+    [providers, set],
+  )
 
   const [saving, setSaving] = useState(false)
   const [cookiesUploading, setCookiesUploading] = useState(false)
@@ -167,18 +158,13 @@ export function SettingsPage() {
   const importFileRef = useRef<HTMLInputElement>(null)
 
   async function handleSave() {
-    const live = liveFields.read()
-    const saved: Record<string, string> = {}
-    for (const key of Object.keys(live)) saved[key] = loaded?.[key] ?? ''
-    const patch = mergeLiveValues(draft as Record<string, string>, live, saved)
-    if (Object.keys(patch).length === 0) return
+    if (!dirty) return
     setSaving(true)
     try {
-      await api.saveConfig(patch)
+      await api.saveConfig(draft)
       toast.success('Settings saved')
-      await queryClient.refetchQueries({ queryKey: ['config'] })
       reset()
-      setFormGeneration((n) => n + 1)
+      await queryClient.invalidateQueries({ queryKey: ['config'] })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save settings')
     } finally {
@@ -246,10 +232,17 @@ export function SettingsPage() {
     }
   }
 
-  const provider = get('llm_provider') || 'openai'
+  // null until the providers card has adopted the server's (already migrated)
+  // registry, so an unedited page never saves a list it has not seen.
+  const providerRows = providers ?? []
+  const extractionProvider =
+    get('ai_extraction_provider') || get('llm_provider') || providerRows[0]?.id || ''
+  const transcriptionMode = get('transcription_mode') || 'local'
   const mealieEnabled = get('mealie_enabled') === 'true'
   const tandoorEnabled = get('tandoor_enabled') === 'true'
   const confirmBeforeUpload = get('confirm_before_upload') === 'true'
+  // Default on: the lookup needs no key, so only an explicit 'false' means off.
+  const nutritionLookupEnabled = get('nutrition_lookup_enabled') !== 'false'
   const hasCookiesFile = Boolean(loaded?.yt_dlp_cookies_file)
 
   if (sessionLoading || (isAdmin && configLoading)) {
@@ -269,6 +262,7 @@ export function SettingsPage() {
             Extraction settings are managed by an administrator.
           </p>
         </div>
+        <NotificationsCard />
         {localAuth && session && <AccountCard username={session.user} />}
       </div>
     )
@@ -281,116 +275,29 @@ export function SettingsPage() {
         <p className="text-sm text-muted-foreground mt-1">Configure your Pick-a-Recipe application</p>
       </div>
 
-      {/* AI Provider */}
+      <AiProvidersCard providers={providers} onChange={setProviders} />
+
+      {/* AI Extraction */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <BrainIcon className="size-4" />
-            AI Provider
+            AI Extraction
           </CardTitle>
           <CardDescription>
-            Used to turn raw video/page content into a structured recipe.
+            Which of the providers above turns raw video and page content into a
+            structured recipe. It also reads on-screen text and picks the dish photo,
+            so it needs a model that can see images.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <CardContent>
           <Field label="Provider">
-            <Select
-              value={provider}
-              onValueChange={v =>
-                set('llm_provider', v as 'openai' | 'gemini' | 'openrouter')
-              }
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">OpenAI</SelectItem>
-                <SelectItem value="gemini">Google Gemini</SelectItem>
-                <SelectItem value="openrouter">OpenRouter</SelectItem>
-              </SelectContent>
-            </Select>
+            <ProviderPicker
+              providers={providerRows}
+              value={extractionProvider}
+              onChange={v => set('ai_extraction_provider', v)}
+            />
           </Field>
-
-          <div className={provider === 'openai' ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : 'hidden'}>
-            <Field label="OpenAI API Key">
-              <LiveInput
-                field="openai_api_key"
-                formGeneration={formGeneration}
-                defaultValue={loaded?.openai_api_key ?? ''}
-                onEdit={(value) => set('openai_api_key', value)}
-                bind={liveFields.bind}
-                type="password"
-                placeholder="sk-..."
-              />
-            </Field>
-            <Field label="OpenAI Model">
-              <LiveInput
-                field="openai_model"
-                formGeneration={formGeneration}
-                defaultValue={loaded?.openai_model ?? ''}
-                onEdit={(value) => set('openai_model', value)}
-                bind={liveFields.bind}
-                type="text"
-                placeholder="gpt-4"
-              />
-            </Field>
-          </div>
-
-          <div className={provider === 'gemini' ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : 'hidden'}>
-            <Field label="Gemini API Key">
-              <LiveInput
-                field="gemini_api_key"
-                formGeneration={formGeneration}
-                defaultValue={loaded?.gemini_api_key ?? ''}
-                onEdit={(value) => set('gemini_api_key', value)}
-                bind={liveFields.bind}
-                type="password"
-                placeholder="AIza..."
-              />
-            </Field>
-            <Field label="Gemini Model">
-              <LiveInput
-                field="gemini_model"
-                formGeneration={formGeneration}
-                defaultValue={loaded?.gemini_model ?? ''}
-                onEdit={(value) => set('gemini_model', value)}
-                bind={liveFields.bind}
-                type="text"
-                placeholder="gemini-2.5-flash"
-              />
-            </Field>
-          </div>
-
-          <div className={provider === 'openrouter' ? 'flex flex-col gap-2' : 'hidden'}>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="OpenRouter API Key">
-                <LiveInput
-                  field="openrouter_api_key"
-                  formGeneration={formGeneration}
-                  defaultValue={loaded?.openrouter_api_key ?? ''}
-                  onEdit={(value) => set('openrouter_api_key', value)}
-                  bind={liveFields.bind}
-                  type="password"
-                  placeholder="sk-or-..."
-                />
-              </Field>
-              <Field label="OpenRouter Model">
-                <LiveInput
-                  field="openrouter_model"
-                  formGeneration={formGeneration}
-                  defaultValue={loaded?.openrouter_model ?? ''}
-                  onEdit={(value) => set('openrouter_model', value)}
-                  bind={liveFields.bind}
-                  type="text"
-                  placeholder="openai/gpt-4o-mini"
-                />
-              </Field>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Use a vision-capable model slug (e.g. openai/gpt-4o-mini or
-              google/gemini-2.5-flash). Get a key at openrouter.ai/keys.
-            </p>
-          </div>
         </CardContent>
       </Card>
 
@@ -402,38 +309,39 @@ export function SettingsPage() {
             Nutrition lookup
           </CardTitle>
           <CardDescription>
-            Optional live USDA FoodData Central search when an ingredient is missing from the local table.
+            Ingredients are costed from a built-in table first. Anything it does not
+            recognise can be looked up live in Open Food Facts.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Field
-            label="USDA FoodData Central API Key"
-            hint={
-              <>
-                Leave blank to keep using the local table. If this field is empty, the{' '}
-                <code className="font-mono text-xs">USDA_FDC_API_KEY</code> environment variable is used instead. Get a free key at{' '}
+          <div className="flex items-center gap-3">
+            <Switch
+              id="nutrition_lookup_enabled"
+              checked={nutritionLookupEnabled}
+              onCheckedChange={checked =>
+                set('nutrition_lookup_enabled', checked ? 'true' : 'false')
+              }
+            />
+            <div>
+              <Label htmlFor="nutrition_lookup_enabled">
+                Look unknown ingredients up in Open Food Facts
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                An{' '}
                 <a
-                  href="https://fdc.nal.usda.gov/api-key-signup.html"
+                  href="https://world.openfoodfacts.org/"
                   target="_blank"
                   rel="noreferrer"
                   className="underline underline-offset-2 hover:text-foreground"
                 >
-                  fdc.nal.usda.gov
-                </a>
-                . Stored in this instance&apos;s database, never in source code.
-              </>
-            }
-          >
-            <LiveInput
-              field="usda_fdc_api_key"
-              formGeneration={formGeneration}
-              defaultValue={loaded?.usda_fdc_api_key ?? ''}
-              onEdit={(value) => set('usda_fdc_api_key', value)}
-              bind={liveFields.bind}
-              type="password"
-              placeholder="USDA API key"
-            />
-          </Field>
+                  open food database
+                </a>{' '}
+                with worldwide coverage. No API key or account needed. Turn this
+                off for a fully offline instance; the built-in table keeps
+                working either way.
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -516,14 +424,12 @@ export function SettingsPage() {
                   />
                 </Field>
                 <Field label="Mealie API Key">
-                  <LiveInput
-                    field="mealie_api_key"
-                    formGeneration={formGeneration}
-                    defaultValue={loaded?.mealie_api_key ?? ''}
-                    onEdit={(value) => set('mealie_api_key', value)}
-                    bind={liveFields.bind}
+                  <Input
                     type="password"
                     placeholder="Your Mealie API key"
+                    autoComplete="off"
+                    value={get('mealie_api_key')}
+                    onChange={e => set('mealie_api_key', e.target.value)}
                   />
                 </Field>
               </CardContent>
@@ -557,14 +463,12 @@ export function SettingsPage() {
                   />
                 </Field>
                 <Field label="Tandoor API Key">
-                  <LiveInput
-                    field="tandoor_api_key"
-                    formGeneration={formGeneration}
-                    defaultValue={loaded?.tandoor_api_key ?? ''}
-                    onEdit={(value) => set('tandoor_api_key', value)}
-                    bind={liveFields.bind}
+                  <Input
                     type="password"
                     placeholder="Your Tandoor API key"
+                    autoComplete="off"
+                    value={get('tandoor_api_key')}
+                    onChange={e => set('tandoor_api_key', e.target.value)}
                   />
                 </Field>
               </CardContent>
@@ -593,62 +497,126 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Whisper */}
+      {/* Speech to text */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <MicIcon className="size-4" />
-            Whisper Transcription
+            Speech to Text
           </CardTitle>
+          <CardDescription>
+            Turning the video&apos;s audio into text. Whisper runs on this server and
+            needs no API; a provider transcribes over the network instead, which is
+            faster on a small machine. Off skips audio entirely, so Whisper is never
+            loaded. Use it when the only configured provider cannot transcribe and
+            the local model is too heavy for this machine.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <Field
-            label="Whisper Model"
-            hint="Larger models are more accurate but slower. 'Small' is recommended for mixed-language content."
-          >
+          <Field label="Transcribe with">
             <Select
-              value={get('whisper_model') || 'small'}
-              onValueChange={v => set('whisper_model', v)}
+              value={transcriptionMode}
+              onValueChange={v => set('transcription_mode', v)}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="tiny">Tiny (fastest, least accurate)</SelectItem>
-                <SelectItem value="base">Base</SelectItem>
-                <SelectItem value="small">Small (recommended)</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="large-v3">Large v3 (slowest, most accurate)</SelectItem>
+                <SelectItem value="off">Off (on-screen text only)</SelectItem>
+                <SelectItem value="local">Whisper on this server (no API needed)</SelectItem>
+                <SelectItem value="provider">One of the AI providers above</SelectItem>
               </SelectContent>
             </Select>
           </Field>
 
-          <Field
-            label="HuggingFace Token"
-            hint={
-              <>
-                Optional. Enables faster model downloads and higher rate limits. Get one at{' '}
-                <a
-                  href="https://huggingface.co/settings/tokens"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline underline-offset-2 hover:text-foreground"
+          {transcriptionMode === 'off' ? (
+            <p className="text-xs text-muted-foreground">
+              Audio is ignored. Recipes are built from on-screen text and the
+              description, and Whisper is not loaded.
+            </p>
+          ) : transcriptionMode === 'local' ? (
+            <>
+              <Field
+                label="Whisper model"
+                hint="Larger models are more accurate but slower. 'Small' is recommended for mixed-language content."
+              >
+                <Select
+                  value={get('whisper_model') || 'small'}
+                  onValueChange={v => set('whisper_model', v)}
                 >
-                  huggingface.co/settings/tokens
-                </a>
-              </>
-            }
-          >
-            <LiveInput
-              field="hf_token"
-              formGeneration={formGeneration}
-              defaultValue={loaded?.hf_token ?? ''}
-              onEdit={(value) => set('hf_token', value)}
-              bind={liveFields.bind}
-              type="password"
-              placeholder="hf_..."
-            />
-          </Field>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tiny">Tiny (fastest, least accurate)</SelectItem>
+                    <SelectItem value="base">Base</SelectItem>
+                    <SelectItem value="small">Small (recommended)</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="large-v3">Large v3 (slowest, most accurate)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+
+              <Field
+                label="HuggingFace token"
+                hint={
+                  <>
+                    Optional, and not an AI provider key: it only downloads the Whisper
+                    weights faster and at a higher rate limit. Get one at{' '}
+                    <a
+                      href="https://huggingface.co/settings/tokens"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-2 hover:text-foreground"
+                    >
+                      huggingface.co/settings/tokens
+                    </a>
+                  </>
+                }
+              >
+                <Input
+                  type="password"
+                  placeholder="hf_..."
+                  value={get('hf_token')}
+                  onChange={e => set('hf_token', e.target.value)}
+                />
+              </Field>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field
+                  label="Provider"
+                  hint="Only providers with an OpenAI-compatible audio endpoint can transcribe."
+                >
+                  <ProviderPicker
+                    providers={providerRows.filter(p => AUDIO_API_TYPES.includes(p.api_type))}
+                    value={get('transcription_provider')}
+                    onChange={v => set('transcription_provider', v)}
+                    emptyLabel="No provider with an audio endpoint"
+                  />
+                </Field>
+                <Field
+                  label="Model"
+                  hint="For example whisper-1, gpt-4o-transcribe or whisper-large-v3."
+                >
+                  <Input
+                    type="text"
+                    placeholder="whisper-1"
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    value={get('transcription_model')}
+                    onChange={e => set('transcription_model', e.target.value)}
+                  />
+                </Field>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                If the provider fails, the job falls back to Whisper on this server
+                rather than losing the audio.
+              </p>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -789,6 +757,8 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
+      <NotificationsCard />
+
       {localAuth && session && (
         <>
           <AccountCard username={session.user} />
@@ -804,9 +774,9 @@ export function SettingsPage() {
               Accounts
             </CardTitle>
             <CardDescription>
-              Sign-in, accounts and admin rights come from Authentik. Add or
-              remove people there, and use its groups to decide who administers
-              this instance.
+              Sign-in, accounts and admin rights come from your identity
+              provider. Add or remove people there, and use its groups to
+              decide who administers this instance.
             </CardDescription>
           </CardHeader>
         </Card>

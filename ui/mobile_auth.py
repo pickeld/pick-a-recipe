@@ -1,6 +1,6 @@
 """Mobile JWT token issuance and verification.
 
-The Android app authenticates through Authentik via a browser round-trip that
+The Android app authenticates through the OIDC provider via a browser round-trip that
 hands back an access/refresh JWT pair over a deep-link redirect (see
 /api/mobile/auth/login-url in ui/app.py). Tokens are HS256-signed with
 JWT_SECRET_KEY; without that env var the whole mobile surface stays disabled.

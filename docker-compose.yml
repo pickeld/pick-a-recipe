@@ -8,6 +8,10 @@ services:
     container_name: pick-a-recipe
     restart: unless-stopped
     ports:
+      # Plain HTTP. Open http://<host>:5006. There is no default username or
+      # password; the first visit creates the account. A reverse proxy must
+      # connect here with HTTP. Sending plain HTTP to the proxy's HTTPS port
+      # produces "Client sent an HTTP request to an HTTPS server."
       - "5006:5006"
     environment:
       - HOST=0.0.0.0
@@ -16,8 +20,9 @@ services:
       # Authentication defaults to local accounts stored by this app. The first
       # visit lands on /setup to create the admin account; that page closes for
       # good once an account exists, so create it before exposing the port.
-      # For Authentik single sign-on instead, set AUTH_MODE=authentik plus
-      # AUTHENTIK_CLIENT_ID / AUTHENTIK_CLIENT_SECRET (README → Authentication).
+      # For single sign-on instead, set AUTH_MODE=oidc plus OIDC_ISSUER_URL /
+      # OIDC_CLIENT_ID / OIDC_CLIENT_SECRET. Any OpenID Connect provider works
+      # — Authentik, Authelia, Keycloak, Pocket ID … (README → Authentication).
     volumes:
       - pick-a-recipe:/app/data
       - pick-a-recipe:/tmp

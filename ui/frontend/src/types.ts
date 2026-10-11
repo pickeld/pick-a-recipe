@@ -256,10 +256,46 @@ export interface ReuploadResult {
   image_uploaded: boolean
 }
 
+// ===== AI providers =====
+
+/** One configured way to reach a model. */
+export interface AiProvider {
+  id: string
+  name: string
+  api_type: string
+  api_key: string
+  base_url: string
+  model: string
+}
+
+/** What an API dialect needs, for rendering its fields. */
+export interface ApiTypeSpec {
+  label: string
+  needs_base_url: boolean
+  default_base_url: string
+  /** models.dev provider id whose models to suggest, or '' for none. */
+  catalog: string
+  example_model: string
+  /** Shown in the empty API key field. A format example, never a real key. */
+  key_placeholder?: string
+  /** Where this dialect's key comes from, and what it is not. */
+  key_hint?: string
+  key_url?: string
+  key_link_label?: string
+}
+
 // ===== Config / settings =====
 
 /** Every value is stored & returned as a string by the backend. */
 export interface AppConfig {
+  /** JSON array of AiProvider; see the AI Providers card. */
+  ai_providers: string
+  ai_extraction_provider: string
+  /** 'local' runs Whisper here, 'provider' posts audio to a provider. */
+  transcription_mode: string
+  transcription_provider: string
+  transcription_model: string
+  /** Superseded by ai_providers; still read when migrating an old install. */
   llm_provider: 'openai' | 'gemini' | 'openrouter'
   openai_api_key: string
   openai_model: string
@@ -279,7 +315,7 @@ export interface AppConfig {
   whisper_model: string
   confirm_before_upload: string
   hf_token: string
-  usda_fdc_api_key: string
+  nutrition_lookup_enabled: string
   yt_dlp_cookies_file: string
   yt_dlp_cookies_browser: string
   max_concurrent_jobs: string
@@ -295,8 +331,8 @@ export interface SettingsExport {
 export interface SessionUser {
   user: string
   is_admin: boolean
-  auth_mode?: 'local' | 'authentik'
-  /** False under Authentik, where the IdP owns accounts and passwords. */
+  auth_mode?: 'local' | 'oidc'
+  /** False under OIDC, where the IdP owns accounts and passwords. */
   local_auth_enabled?: boolean
   /** Always false now; kept so an older cached bundle still parses a response. */
   auth_disabled?: boolean

@@ -76,6 +76,70 @@ jobs:
         # only surface as a failed deploy after merge.
         run: npm run build
 
+  image:
+    name: Docker image (${{ matrix.arch }})
+    # Every architecture deploy.yml publishes, on the same native runners. The
+    # publish refuses to move :latest unless all of them built, so a Dockerfile
+    # or dependency change that breaks one would otherwise surface only as a
+    # stuck deploy after merge. arm64 is the one that matters most: nobody
+    # here runs it day to day, which is how it went missing in issue #45.
+    strategy:
+      # Each architecture's result is worth having even when the other fails.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: pick-a-recipe:ci
+          # Read-only: deploy.yml fills these scopes from main, and layers
+          # written from a pull request would be visible to that pull request
+          # alone anyway.
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+
+      - name: Check the native dependencies
+        # A successful build does not prove these work: a wheel can install
+        # and still fail to load, and ffmpeg and deno are downloaded per
+        # architecture. These are what differ between amd64 and arm64.
+        run: |
+          docker run --rm pick-a-recipe:ci sh -ec '
+            ffmpeg -version | head -1
+            deno --version | head -1
+            python -c "import faster_whisper, ctranslate2, av, curl_cffi, argon2, cryptography; print(\"native imports ok\")"
+          '
+
+      - name: Start the app
+        # Runs the image's own CMD, so this also covers the yt-dlp upgrade it
+        # does on startup.
+        run: |
+          docker run -d --name app -p 5006:5006 pick-a-recipe:ci
+          for _ in $(seq 90); do
+            if curl -fsS http://localhost:5006/healthz; then
+              exit 0
+            fi
+            if [[ $(docker inspect -f '{{.State.Running}}' app) != true ]]; then
+              echo "::error::The container exited during startup"
+              break
+            fi
+            sleep 2
+          done
+          docker logs app
+          exit 1
+
   mobile:
     name: Android app
     runs-on: ubuntu-latest

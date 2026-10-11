@@ -220,6 +220,19 @@ export const api = {
   // ===== Config =====
   getConfig: () => request<import('@/types').AppConfig>('/api/config'),
 
+  // ===== AI providers =====
+  aiProviders: () =>
+    request<{
+      providers: import('@/types').AiProvider[]
+      api_types: Record<string, import('@/types').ApiTypeSpec>
+      compatible_catalogs: Record<string, string>
+    }>('/api/ai/providers'),
+
+  modelCatalog: (catalog: string) =>
+    request<{ models: { id: string; name: string; released: string }[] }>(
+      `/api/ai/model-catalog?catalog=${encodeURIComponent(catalog)}`,
+    ),
+
   saveConfig: (patch: Partial<import('@/types').AppConfig>) =>
     request<{ status: string; saved_keys: string[] }>('/api/config', {
       method: 'POST',
@@ -250,6 +263,8 @@ export const api = {
     }),
 
   // ===== Push notifications =====
+  pushVapidKey: () => request<{ key: string }>('/api/push/vapid-key'),
+
   pushSubscribe: (subscription: PushSubscriptionJSON) =>
     request<{ status: string }>('/api/push/subscribe', {
       method: 'POST',
@@ -268,9 +283,10 @@ export const api = {
   // ===== Auth =====
   authStatus: () =>
     request<{
-      auth_mode: 'local' | 'authentik'
+      auth_mode: 'local' | 'oidc'
       local_auth_enabled: boolean
       sso_enabled: boolean
+      sso_provider_name: string
       setup_required: boolean
       mobile_auth_enabled: boolean
       auth_disabled: boolean

@@ -2,9 +2,9 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from ai_providers import AiSession
 from config import config
 from helpers import get_recipe_system_prompt, get_web_recipe_system_prompt, get_yield_nutrition_prompt, setup_logger
-from llm_session import LlmSession
 from recipe_schema import (
     NUTRITION_JSON_SCHEMA,
     RECIPE_JSON_SCHEMA,
@@ -195,11 +195,7 @@ class Chef:
         model: str | None = None,
     ):
         logger.info("[AI Recipe] Initializing Chef...")
-        self._llm = LlmSession(model)
-        self.provider = self._llm.provider
-        self.client = self._llm.client
-        logger.info(f"[AI Recipe] Using {self.provider} LLM provider")
-        logger.info(f"[AI Recipe] {self.provider} model: {self.model}")
+        self.session = AiSession(model=model)
         self.source_url = source_url
         self.description = description
         self.transcription = transcription
@@ -208,14 +204,6 @@ class Chef:
             f"[AI Recipe] Chef initialized. Audio {len(transcription)} chars, "
             f"on-screen {len(self.visual_text)} chars"
         )
-
-    @property
-    def model(self) -> str:
-        return self._llm.model
-
-    @model.setter
-    def model(self, value: str) -> None:
-        self._llm.model = value
 
     def _call_llm(
         self,
@@ -226,8 +214,12 @@ class Chef:
         json_schema: dict[str, Any] | None = None,
         schema_model: type | None = None,
     ) -> str:
-        """Call the LLM and return the response text, abstracting provider differences."""
-        return self._llm.call(
+        """Ask the configured provider for JSON matching the given schema.
+
+        Every dialect difference lives in ai_providers; Chef only has to say
+        what it wants back.
+        """
+        return self.session.complete_json(
             system_prompt,
             user_content,
             schema_name=schema_name,
@@ -375,7 +367,7 @@ class Chef:
         looked = lookup_recipe_nutrition(recipe)
         if looked:
             recipe["nutrition"] = looked
-            logger.info("[Chef] Nutrition from local/USDA table: %s", looked)
+            logger.info("[Chef] Nutrition estimated from ingredients: %s", looked)
         else:
             recipe.pop("nutrition", None)
 
@@ -425,7 +417,7 @@ class Chef:
         looked = lookup_recipe_nutrition(recipe)
         if looked:
             recipe["nutrition"] = looked
-            logger.info("[Chef] Nutrition from local/USDA table after yield: %s", looked)
+            logger.info("[Chef] Nutrition estimated from ingredients after yield: %s", looked)
         else:
             recipe.pop("nutrition", None)
         return recipe

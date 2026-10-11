@@ -216,7 +216,7 @@ void main() {
       final ProviderContainer c = harness(<String, List<FakeReply>>{
         kPasswordLoginPath: <FakeReply>[
           const FakeReply(400, <String, dynamic>{
-            'error': 'This server uses single sign-on. Sign in with Authentik.',
+            'error': 'This server uses single sign-on. Sign in with Keycloak.',
           }),
         ],
       });
