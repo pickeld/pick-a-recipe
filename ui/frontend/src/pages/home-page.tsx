@@ -7,7 +7,9 @@ import {
   LayersIcon,
   ChevronDownIcon,
   CheckCircle2Icon,
+  CircleAlertIcon,
   ListChecksIcon,
+  XIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -25,6 +27,7 @@ import { JobCard } from '@/components/job-card'
 import { RecipeEditForm } from '@/components/recipe-edit-form'
 import { ImagePicker } from '@/components/image-picker'
 import { api } from '@/lib/api'
+import { visibleFailureNotices } from '@/lib/settings-form'
 import { useSocketEvent, useTransitionEvent } from '@/lib/socket'
 import { useSession } from '@/hooks/use-session'
 import type {
@@ -73,6 +76,8 @@ export function HomePage() {
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchInput, setBatchInput] = useState('')
   const [previewState, setPreviewState] = useState<PreviewState | null>(null)
+  const [liveFailures, setLiveFailures] = useState<{ key: string; message: string }[]>([])
+  const [dismissedFailures, setDismissedFailures] = useState<string[]>([])
 
   const autoStartFiredRef = useRef(false)
 
@@ -94,6 +99,20 @@ export function HomePage() {
     queryKey: ['history-recent'],
     queryFn: () => api.getHistory({ limit: 5, status: 'success' }),
   })
+
+  const { data: failedHistory } = useQuery({
+    queryKey: ['history-recent-failed'],
+    queryFn: () => api.getHistory({ limit: 3, status: 'failed' }),
+  })
+
+  const failureNotices = visibleFailureNotices(
+    liveFailures,
+    (failedHistory?.items ?? []).map((entry) => ({
+      key: `history:${entry.id}`,
+      message: entry.error_message ?? '',
+    })),
+    dismissedFailures,
+  )
 
   const recentCompleted = historyData?.items ?? []
 
@@ -148,9 +167,15 @@ export function HomePage() {
   const handleJobFailed = useCallback(
     (p: JobFailedPayload) => {
       invalidateJobs()
-      toast.error(`Job failed: ${p.error}`)
+      void queryClient.invalidateQueries({ queryKey: ['history-recent-failed'] })
+      const message = p.error?.trim() || 'The job failed.'
+      setLiveFailures((prev) => [
+        { key: `job:${p.job_id}`, message },
+        ...prev.filter((item) => item.key !== `job:${p.job_id}`),
+      ])
+      toast.error(message, { duration: 20000, id: `job-failed-${p.job_id}` })
     },
-    [invalidateJobs],
+    [invalidateJobs, queryClient],
   )
 
   const handleJobCancelled = useCallback(
@@ -394,6 +419,32 @@ export function HomePage() {
           )}
         </div>
       </div>
+
+      {failureNotices.length > 0 && (
+        <section className="space-y-2">
+          {failureNotices.map((notice) => (
+            <div
+              key={notice.key}
+              className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              <CircleAlertIcon className="mt-0.5 size-4 shrink-0" />
+              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">{notice.message}</p>
+              <button
+                type="button"
+                className="shrink-0 rounded-md p-1 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                aria-label="Dismiss error"
+                onClick={() =>
+                  setDismissedFailures((prev) =>
+                    prev.includes(notice.key) ? prev : [...prev, notice.key],
+                  )
+                }
+              >
+                <XIcon className="size-4" />
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
 
       {(activeJobs.length > 0 || jobsLoading) && (
         <section className="space-y-3">

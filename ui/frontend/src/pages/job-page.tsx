@@ -92,7 +92,12 @@ export function JobPage() {
     'job_failed',
     useCallback(
       (data: JobFailedPayload) => {
-        if (data.job_id === jobId) invalidate()
+        if (data.job_id !== jobId) return
+        invalidate()
+        toast.error(data.error?.trim() || 'The job failed.', {
+          duration: 20000,
+          id: `job-failed-${data.job_id}`,
+        })
       },
       [jobId, invalidate],
     ),

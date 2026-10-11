@@ -1109,31 +1109,32 @@ def settings():
     config = load_config()
 
     if request.method == 'POST':
-        # Update configuration from form
-        config['llm_provider'] = request.form.get('llm_provider', 'openai')
-        config['openai_api_key'] = request.form.get('openai_api_key', '')
-        config['openai_model'] = request.form.get('openai_model', '')
-        config['gemini_api_key'] = request.form.get('gemini_api_key', '')
-        config['gemini_model'] = request.form.get('gemini_model', '')
-        config['openrouter_api_key'] = request.form.get('openrouter_api_key', '')
-        config['openrouter_model'] = request.form.get('openrouter_model', '')
-        config['recipe_lang'] = request.form.get('recipe_lang', 'hebrew')
-        config['mealie_api_key'] = request.form.get('mealie_api_key', '')
-        config['mealie_host'] = request.form.get('mealie_host', '')
-        config['tandoor_api_key'] = request.form.get('tandoor_api_key', '')
-        config['tandoor_host'] = request.form.get('tandoor_host', '')
-        config['target_language'] = request.form.get('target_language', 'he')
+        # Text fields update only when the form actually sent them. Hidden
+        # provider inputs are disabled, so a Gemini save must not wipe the
+        # OpenAI key by treating "absent" as "blank".
+        for key in (
+            'llm_provider',
+            'openai_api_key', 'openai_model',
+            'gemini_api_key', 'gemini_model',
+            'openrouter_api_key', 'openrouter_model',
+            'recipe_lang',
+            'mealie_api_key', 'mealie_host',
+            'tandoor_api_key', 'tandoor_host',
+            'target_language',
+            'whisper_model',
+            'hf_token',
+            'usda_fdc_api_key',
+            'yt_dlp_cookies_file',
+            'yt_dlp_cookies_browser',
+            'max_concurrent_jobs',
+        ):
+            if key in request.form:
+                config[key] = request.form.get(key) or ''
+        # Checkbox: present in form data only when checked
         config['tandoor_enabled'] = 'true' if request.form.get('tandoor_enabled') else 'false'
         config['mealie_enabled'] = 'true' if request.form.get('mealie_enabled') else 'false'
-        config['whisper_model'] = request.form.get('whisper_model', 'small')
-        config['hf_token'] = request.form.get('hf_token', '')
-        config['usda_fdc_api_key'] = request.form.get('usda_fdc_api_key', '')
-        config['yt_dlp_cookies_file'] = request.form.get('yt_dlp_cookies_file', '')
-        config['yt_dlp_cookies_browser'] = request.form.get('yt_dlp_cookies_browser', '')
-        # Checkbox: present in form data only when checked
         config['confirm_before_upload'] = 'true' if request.form.get(
             'confirm_before_upload') else 'false'
-        config['max_concurrent_jobs'] = request.form.get('max_concurrent_jobs', '3')
 
         save_config(config)
         get_job_manager().refresh_concurrency()

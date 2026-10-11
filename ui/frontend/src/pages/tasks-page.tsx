@@ -656,10 +656,6 @@ function TaskRowItem({
   if (row.bucket === 'done' && row.outputTarget) metaBits.push('→ ' + row.outputTarget)
   const h = hostOf(row.url)
   if (h && row.bucket === 'done') metaBits.push(h)
-  if (row.kind === 'history' && row.status === 'failed' && row.error) {
-    metaBits.push(row.error.length > 80 ? row.error.slice(0, 80) + '…' : row.error)
-  }
-
   const handleRowClick = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('input, button, [role="menuitem"], [role="menu"]')) return
     if (isSuccess) onViewRecipe(row.historyId!)
@@ -728,6 +724,10 @@ function TaskRowItem({
           <p className="text-xs text-muted-foreground font-mono truncate">
             {metaBits.filter(Boolean).join(' · ')}
           </p>
+        )}
+
+        {row.kind === 'history' && row.status === 'failed' && row.error && (
+          <p className="text-xs text-destructive whitespace-pre-wrap break-words">{row.error}</p>
         )}
       </div>
 

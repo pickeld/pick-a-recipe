@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 
 import { api } from '@/lib/api'
+import { mergeLiveValues } from '@/lib/settings-form'
 import type { AppConfig } from '@/types'
 import { useSession } from '@/hooks/use-session'
 import { AccountCard } from '@/components/settings/account-card'
@@ -84,6 +85,61 @@ function Field({ label, hint, children }: { label: string; hint?: React.ReactNod
   )
 }
 
+function useLiveFields() {
+  const refs = useRef(new Map<string, HTMLInputElement>())
+  const binders = useRef(new Map<string, (el: HTMLInputElement | null) => void>())
+
+  function bind(field: string) {
+    let binder = binders.current.get(field)
+    if (!binder) {
+      binder = (el) => {
+        if (el) refs.current.set(field, el)
+        else refs.current.delete(field)
+      }
+      binders.current.set(field, binder)
+    }
+    return binder
+  }
+
+  function read(): Record<string, string | undefined> {
+    const live: Record<string, string | undefined> = {}
+    for (const [key, el] of refs.current) live[key] = el.value
+    return live
+  }
+
+  return { bind, read }
+}
+
+function LiveInput({
+  field,
+  formGeneration,
+  defaultValue,
+  onEdit,
+  bind,
+  ...props
+}: {
+  field: string
+  formGeneration: number
+  defaultValue: string
+  onEdit: (value: string) => void
+  bind: (field: string) => (el: HTMLInputElement | null) => void
+} & Omit<React.ComponentProps<typeof Input>, 'value' | 'defaultValue' | 'onChange' | 'name'>) {
+  return (
+    <Input
+      key={`${field}-${formGeneration}`}
+      name={field}
+      ref={bind(field)}
+      defaultValue={defaultValue}
+      {...props}
+      autoComplete="off"
+      onInput={(e) => onEdit(e.currentTarget.value)}
+      onAnimationStart={(e) => {
+        if (e.animationName === 'onAutoFillStart') onEdit(e.currentTarget.value)
+      }}
+    />
+  )
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient()
   const { data: session, isLoading: sessionLoading } = useSession()
@@ -95,10 +151,15 @@ export function SettingsPage() {
     queryFn: () => api.getConfig(),
     // Instance configuration holds the API keys, so the server refuses it to
     // non-admins. Not asking avoids a pointless 403 on every visit.
+    // Leave a half-edited form alone when the window regains focus. A refetch
+    // would otherwise paint saved values back over fields the user is filling.
     enabled: isAdmin,
+    refetchOnWindowFocus: false,
   })
 
   const { get, set, reset, draft, dirty } = useDraft(loaded)
+  const liveFields = useLiveFields()
+  const [formGeneration, setFormGeneration] = useState(0)
 
   const [saving, setSaving] = useState(false)
   const [cookiesUploading, setCookiesUploading] = useState(false)
@@ -106,13 +167,18 @@ export function SettingsPage() {
   const importFileRef = useRef<HTMLInputElement>(null)
 
   async function handleSave() {
-    if (!dirty) return
+    const live = liveFields.read()
+    const saved: Record<string, string> = {}
+    for (const key of Object.keys(live)) saved[key] = loaded?.[key] ?? ''
+    const patch = mergeLiveValues(draft as Record<string, string>, live, saved)
+    if (Object.keys(patch).length === 0) return
     setSaving(true)
     try {
-      await api.saveConfig(draft)
+      await api.saveConfig(patch)
       toast.success('Settings saved')
+      await queryClient.refetchQueries({ queryKey: ['config'] })
       reset()
-      await queryClient.invalidateQueries({ queryKey: ['config'] })
+      setFormGeneration((n) => n + 1)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save settings')
     } finally {
@@ -245,80 +311,86 @@ export function SettingsPage() {
             </Select>
           </Field>
 
-          {provider === 'openai' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="OpenAI API Key">
-                <Input
-                  type="password"
-                  placeholder="sk-..."
-                  autoComplete="off"
-                  value={get('openai_api_key')}
-                  onChange={e => set('openai_api_key', e.target.value)}
-                />
-              </Field>
-              <Field label="OpenAI Model">
-                <Input
-                  type="text"
-                  placeholder="gpt-4"
-                  autoComplete="off"
-                  value={get('openai_model')}
-                  onChange={e => set('openai_model', e.target.value)}
-                />
-              </Field>
-            </div>
-          )}
+          <div className={provider === 'openai' ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : 'hidden'}>
+            <Field label="OpenAI API Key">
+              <LiveInput
+                field="openai_api_key"
+                formGeneration={formGeneration}
+                defaultValue={loaded?.openai_api_key ?? ''}
+                onEdit={(value) => set('openai_api_key', value)}
+                bind={liveFields.bind}
+                type="password"
+                placeholder="sk-..."
+              />
+            </Field>
+            <Field label="OpenAI Model">
+              <LiveInput
+                field="openai_model"
+                formGeneration={formGeneration}
+                defaultValue={loaded?.openai_model ?? ''}
+                onEdit={(value) => set('openai_model', value)}
+                bind={liveFields.bind}
+                type="text"
+                placeholder="gpt-4"
+              />
+            </Field>
+          </div>
 
-          {provider === 'gemini' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Gemini API Key">
-                <Input
-                  type="password"
-                  placeholder="AIza..."
-                  autoComplete="off"
-                  value={get('gemini_api_key')}
-                  onChange={e => set('gemini_api_key', e.target.value)}
-                />
-              </Field>
-              <Field label="Gemini Model">
-                <Input
-                  type="text"
-                  placeholder="gemini-2.5-flash"
-                  autoComplete="off"
-                  value={get('gemini_model')}
-                  onChange={e => set('gemini_model', e.target.value)}
-                />
-              </Field>
-            </div>
-          )}
+          <div className={provider === 'gemini' ? 'grid grid-cols-1 sm:grid-cols-2 gap-4' : 'hidden'}>
+            <Field label="Gemini API Key">
+              <LiveInput
+                field="gemini_api_key"
+                formGeneration={formGeneration}
+                defaultValue={loaded?.gemini_api_key ?? ''}
+                onEdit={(value) => set('gemini_api_key', value)}
+                bind={liveFields.bind}
+                type="password"
+                placeholder="AIza..."
+              />
+            </Field>
+            <Field label="Gemini Model">
+              <LiveInput
+                field="gemini_model"
+                formGeneration={formGeneration}
+                defaultValue={loaded?.gemini_model ?? ''}
+                onEdit={(value) => set('gemini_model', value)}
+                bind={liveFields.bind}
+                type="text"
+                placeholder="gemini-2.5-flash"
+              />
+            </Field>
+          </div>
 
-          {provider === 'openrouter' && (
-            <div className="flex flex-col gap-2">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="OpenRouter API Key">
-                  <Input
-                    type="password"
-                    placeholder="sk-or-..."
-                    autoComplete="off"
-                    value={get('openrouter_api_key')}
-                    onChange={e => set('openrouter_api_key', e.target.value)}
-                  />
-                </Field>
-                <Field label="OpenRouter Model">
-                  <Input
-                    type="text"
-                    placeholder="openai/gpt-4o-mini"
-                    autoComplete="off"
-                    value={get('openrouter_model')}
-                    onChange={e => set('openrouter_model', e.target.value)}
-                  />
-                </Field>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Use a vision-capable model slug (e.g. openai/gpt-4o-mini or
-                google/gemini-2.5-flash). Get a key at openrouter.ai/keys.
-              </p>
+          <div className={provider === 'openrouter' ? 'flex flex-col gap-2' : 'hidden'}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="OpenRouter API Key">
+                <LiveInput
+                  field="openrouter_api_key"
+                  formGeneration={formGeneration}
+                  defaultValue={loaded?.openrouter_api_key ?? ''}
+                  onEdit={(value) => set('openrouter_api_key', value)}
+                  bind={liveFields.bind}
+                  type="password"
+                  placeholder="sk-or-..."
+                />
+              </Field>
+              <Field label="OpenRouter Model">
+                <LiveInput
+                  field="openrouter_model"
+                  formGeneration={formGeneration}
+                  defaultValue={loaded?.openrouter_model ?? ''}
+                  onEdit={(value) => set('openrouter_model', value)}
+                  bind={liveFields.bind}
+                  type="text"
+                  placeholder="openai/gpt-4o-mini"
+                />
+              </Field>
             </div>
-          )}
+            <p className="text-xs text-muted-foreground">
+              Use a vision-capable model slug (e.g. openai/gpt-4o-mini or
+              google/gemini-2.5-flash). Get a key at openrouter.ai/keys.
+            </p>
+          </div>
         </CardContent>
       </Card>
 
@@ -352,12 +424,14 @@ export function SettingsPage() {
               </>
             }
           >
-            <Input
+            <LiveInput
+              field="usda_fdc_api_key"
+              formGeneration={formGeneration}
+              defaultValue={loaded?.usda_fdc_api_key ?? ''}
+              onEdit={(value) => set('usda_fdc_api_key', value)}
+              bind={liveFields.bind}
               type="password"
               placeholder="USDA API key"
-              autoComplete="off"
-              value={get('usda_fdc_api_key')}
-              onChange={e => set('usda_fdc_api_key', e.target.value)}
             />
           </Field>
         </CardContent>
@@ -442,12 +516,14 @@ export function SettingsPage() {
                   />
                 </Field>
                 <Field label="Mealie API Key">
-                  <Input
+                  <LiveInput
+                    field="mealie_api_key"
+                    formGeneration={formGeneration}
+                    defaultValue={loaded?.mealie_api_key ?? ''}
+                    onEdit={(value) => set('mealie_api_key', value)}
+                    bind={liveFields.bind}
                     type="password"
                     placeholder="Your Mealie API key"
-                    autoComplete="off"
-                    value={get('mealie_api_key')}
-                    onChange={e => set('mealie_api_key', e.target.value)}
                   />
                 </Field>
               </CardContent>
@@ -481,12 +557,14 @@ export function SettingsPage() {
                   />
                 </Field>
                 <Field label="Tandoor API Key">
-                  <Input
+                  <LiveInput
+                    field="tandoor_api_key"
+                    formGeneration={formGeneration}
+                    defaultValue={loaded?.tandoor_api_key ?? ''}
+                    onEdit={(value) => set('tandoor_api_key', value)}
+                    bind={liveFields.bind}
                     type="password"
                     placeholder="Your Tandoor API key"
-                    autoComplete="off"
-                    value={get('tandoor_api_key')}
-                    onChange={e => set('tandoor_api_key', e.target.value)}
                   />
                 </Field>
               </CardContent>
@@ -561,11 +639,14 @@ export function SettingsPage() {
               </>
             }
           >
-            <Input
+            <LiveInput
+              field="hf_token"
+              formGeneration={formGeneration}
+              defaultValue={loaded?.hf_token ?? ''}
+              onEdit={(value) => set('hf_token', value)}
+              bind={liveFields.bind}
               type="password"
               placeholder="hf_..."
-              value={get('hf_token')}
-              onChange={e => set('hf_token', e.target.value)}
             />
           </Field>
         </CardContent>

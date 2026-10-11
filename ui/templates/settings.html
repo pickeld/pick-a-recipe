@@ -334,7 +334,13 @@
 const providerSelect = document.getElementById('llm_provider');
 function syncProviderFields() {
     document.querySelectorAll('.provider-fields').forEach(group => {
-        group.hidden = group.dataset.provider !== providerSelect.value;
+        const active = group.dataset.provider === providerSelect.value;
+        group.hidden = !active;
+        // Disabled controls are omitted from the submit, so saving Gemini
+        // cannot blank the OpenAI key sitting in a hidden field.
+        group.querySelectorAll('input, select, textarea').forEach(el => {
+            el.disabled = !active;
+        });
     });
 }
 providerSelect.addEventListener('change', syncProviderFields);

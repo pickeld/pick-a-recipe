@@ -535,5 +535,54 @@ class TestAuthentikModeRefusesUserAdmin(unittest.TestCase):
         self.assertEqual(self.res['own_password_status'], 400)
 
 
+class TestProviderSettingsAreNotWiped(unittest.TestCase):
+    """Saving one provider must leave the other providers' keys in place.
+
+    The legacy form disables the fields of the providers you are not editing.
+    Those fields are then absent from the post, and absence must not be stored
+    as a blank key.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.res = _run_local("""
+            admin, _user = seed()
+            seeded = admin.post('/api/config', json={
+                'llm_provider': 'gemini',
+                'gemini_api_key': 'gemini-test-key',
+                'gemini_model': 'gemini-2.5-flash',
+                'openai_api_key': 'openai-test-key',
+            })
+            # Only the OpenAI fields are posted, the way the form does once
+            # Gemini's inputs are disabled.
+            saved = admin.post('/settings', data={
+                'llm_provider': 'openai',
+                'openai_api_key': 'openai-test-key',
+                'openai_model': 'gpt-4o',
+                'recipe_lang': 'hebrew',
+                'target_language': 'he',
+                'whisper_model': 'small',
+                'max_concurrent_jobs': '3',
+            })
+            config = database.load_config()
+            emit(
+                seeded_status=seeded.status_code,
+                saved_status=saved.status_code,
+                provider=config.get('llm_provider'),
+                gemini_api_key=config.get('gemini_api_key'),
+                gemini_model=config.get('gemini_model'),
+                openai_model=config.get('openai_model'),
+            )
+        """)
+
+    def test_form_save_keeps_the_hidden_provider_key(self):
+        self.assertEqual(self.res['seeded_status'], 200)
+        self.assertIn(self.res['saved_status'], (200, 302))
+        self.assertEqual(self.res['provider'], 'openai')
+        self.assertEqual(self.res['gemini_api_key'], 'gemini-test-key')
+        self.assertEqual(self.res['gemini_model'], 'gemini-2.5-flash')
+        self.assertEqual(self.res['openai_model'], 'gpt-4o')
+
+
 if __name__ == '__main__':
     unittest.main()
