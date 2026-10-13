@@ -203,7 +203,7 @@ export function JobCard({ job, onCancel, onRetry, href }: JobCardProps) {
           </div>
         </div>
 
-        {job.status === 'failed' && (
+        {(job.status === 'failed' || job.status === 'expired') && (
           <div className="space-y-2">
             {job.error_message && (
               <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">

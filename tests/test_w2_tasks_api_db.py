@@ -85,7 +85,7 @@ class TestListJobsByStates(unittest.TestCase):
                                                       user_id='alice')
                        if j['id'] == jid)
             self.assertEqual(row['pending_upload_id'], up)
-            self.assertIsNotNone(row['approval_expires_at'])
+            self.assertIsNone(row['approval_expires_at'])
         finally:
             _purge([jid])
             from database import get_db

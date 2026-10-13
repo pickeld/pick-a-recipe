@@ -15,37 +15,18 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog'
 import { JobCard } from '@/components/job-card'
-import { RecipeEditForm } from '@/components/recipe-edit-form'
-import { ImagePicker } from '@/components/image-picker'
 import { api } from '@/lib/api'
 import { visibleFailureNotices } from '@/lib/settings-form'
 import { useSocketEvent, useTransitionEvent } from '@/lib/socket'
 import { useSession } from '@/hooks/use-session'
 import type {
   Job,
-  PendingUpload,
-  RecipeData,
   JobProgressPayload,
   JobCompletePayload,
   JobFailedPayload,
   JobTransitionPayload,
 } from '@/types'
-
-interface PreviewState {
-  uploadId: string
-  pendingUpload: PendingUpload
-  selectedImageIndex: number
-  recipe: RecipeData
-}
 
 function isValidUrl(s: string): boolean {
   try {
@@ -75,7 +56,6 @@ export function HomePage() {
   const [urlInput, setUrlInput] = useState<string>(() => sharedUrl)
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchInput, setBatchInput] = useState('')
-  const [previewState, setPreviewState] = useState<PreviewState | null>(null)
   const [liveFailures, setLiveFailures] = useState<{ key: string; message: string }[]>([])
   const [dismissedFailures, setDismissedFailures] = useState<string[]>([])
 
@@ -116,34 +96,6 @@ export function HomePage() {
 
   const recentCompleted = historyData?.items ?? []
 
-  const { data: pendingData } = useQuery({
-    queryKey: ['pending-uploads'],
-    queryFn: () => api.getPendingUploads(),
-    staleTime: 0,
-  })
-
-  const pendingUploads = pendingData?.pending_uploads ?? []
-
-  const openPreview = useCallback((upload: PendingUpload) => {
-    setPreviewState({
-      uploadId: upload.upload_id,
-      pendingUpload: upload,
-      selectedImageIndex: upload.best_image_index,
-      recipe: structuredClone(upload.recipe),
-    })
-  }, [])
-
-  const shownPendingRef = useRef<Set<string>>(new Set())
-
-  if (pendingUploads.length > 0 && !previewState) {
-    const first = pendingUploads[0]
-    if (!shownPendingRef.current.has(first.upload_id)) {
-      shownPendingRef.current.add(first.upload_id)
-      toast.info(`Recipe "${first.recipe.name || 'Untitled'}" is waiting for your confirmation!`)
-      openPreview(first)
-    }
-  }
-
   const invalidateJobs = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['jobs'] })
   }, [queryClient])
@@ -173,7 +125,7 @@ export function HomePage() {
         { key: `job:${p.job_id}`, message },
         ...prev.filter((item) => item.key !== `job:${p.job_id}`),
       ])
-      toast.error(message, { duration: 20000, id: `job-failed-${p.job_id}` })
+      toast.error(message, { duration: Infinity, id: `job-failed-${p.job_id}` })
     },
     [invalidateJobs, queryClient],
   )
@@ -193,39 +145,10 @@ export function HomePage() {
     [invalidateJobs],
   )
 
-  const handleRecipePreview = useCallback(
-    (p: {
-      job_id: string
-      upload_id: string | null
-      recipe: import('@/types').RecipeData
-      image_data: string | null
-      candidate_images: import('@/types').CandidateImage[]
-      best_image_index: number
-      output_target: string
-      owner: string | null
-    }) => {
-      if (!p.upload_id) return
-      const upload: PendingUpload = {
-        upload_id: p.upload_id,
-        job_id: p.job_id,
-        recipe: p.recipe,
-        output_target: p.output_target,
-        best_image_index: p.best_image_index,
-        selected_image_index: p.best_image_index,
-        image_data: p.image_data ?? undefined,
-        candidate_images: p.candidate_images,
-      }
-      openPreview(upload)
-      invalidateJobs()
-    },
-    [openPreview, invalidateJobs],
-  )
-
   useSocketEvent('job_progress', handleJobProgress)
   useSocketEvent('job_complete', handleJobComplete)
   useSocketEvent('job_failed', handleJobFailed)
   useSocketEvent('job_cancelled', handleJobCancelled)
-  useSocketEvent('recipe_preview', handleRecipePreview)
 
   useTransitionEvent('running', handleTransition)
   useTransitionEvent('awaiting_approval', handleTransition)
@@ -267,44 +190,6 @@ export function HomePage() {
     mutationFn: (jobId: string) => api.cancelJob(jobId),
     onSuccess: () => {
       invalidateJobs()
-    },
-    onError: (err: Error) => {
-      toast.error(err.message)
-    },
-  })
-
-  const confirmUploadMutation = useMutation({
-    mutationFn: ({
-      uploadId,
-      selectedIndex,
-      recipe,
-    }: {
-      uploadId: string
-      selectedIndex: number
-      recipe: RecipeData
-    }) =>
-      api.confirmPendingUpload(uploadId, {
-        selected_image_index: selectedIndex,
-        recipe,
-      }),
-    onSuccess: () => {
-      setPreviewState(null)
-      void queryClient.invalidateQueries({ queryKey: ['pending-uploads'] })
-      invalidateJobs()
-      toast.success('Upload confirmed!')
-    },
-    onError: (err: Error) => {
-      toast.error(err.message)
-    },
-  })
-
-  const cancelUploadMutation = useMutation({
-    mutationFn: (uploadId: string) => api.cancelPendingUpload(uploadId),
-    onSuccess: () => {
-      setPreviewState(null)
-      void queryClient.invalidateQueries({ queryKey: ['pending-uploads'] })
-      invalidateJobs()
-      toast.info('Upload cancelled')
     },
     onError: (err: Error) => {
       toast.error(err.message)
@@ -514,76 +399,6 @@ export function HomePage() {
         </section>
       )}
 
-      <Dialog
-        open={previewState !== null}
-        onOpenChange={(open) => {
-          if (!open) setPreviewState(null)
-        }}
-      >
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Recipe Preview</DialogTitle>
-            {previewState && (
-              <DialogDescription>
-                Review before uploading to{' '}
-                <span className="font-medium text-foreground">
-                  {previewState.pendingUpload.output_target}
-                </span>
-              </DialogDescription>
-            )}
-          </DialogHeader>
-
-          {previewState && (
-            <div className="space-y-4">
-              {previewState.pendingUpload.candidate_images.length > 0 && (
-                <ImagePicker
-                  images={previewState.pendingUpload.candidate_images}
-                  value={previewState.selectedImageIndex}
-                  onChange={(i) =>
-                    setPreviewState((s) =>
-                      s ? { ...s, selectedImageIndex: i } : s,
-                    )
-                  }
-                />
-              )}
-              <RecipeEditForm
-                recipe={previewState.recipe}
-                onChange={(recipe) =>
-                  setPreviewState((s) => (s ? { ...s, recipe } : s))
-                }
-              />
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (previewState) {
-                  cancelUploadMutation.mutate(previewState.uploadId)
-                }
-              }}
-              disabled={cancelUploadMutation.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                if (previewState) {
-                  confirmUploadMutation.mutate({
-                    uploadId: previewState.uploadId,
-                    selectedIndex: previewState.selectedImageIndex,
-                    recipe: previewState.recipe,
-                  })
-                }
-              }}
-              disabled={confirmUploadMutation.isPending}
-            >
-              Confirm Upload
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

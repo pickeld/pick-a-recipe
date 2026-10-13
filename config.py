@@ -92,7 +92,7 @@ DEFAULT_CONFIG = {
     "openai_api_key": "",
     "openai_model": "gpt-5-mini-2025-08-07",
     "gemini_api_key": "",
-    "gemini_model": "gemini-2.5-flash",
+    "gemini_model": "gemini-3.6-flash",
     "openrouter_api_key": "",
     "openrouter_model": "openai/gpt-4o-mini",
     "recipe_lang": "hebrew",

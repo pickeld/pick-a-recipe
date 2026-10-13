@@ -162,8 +162,7 @@ def _count_pending_approvals() -> int:
         from database import get_db
         params = []
         sql = ("SELECT COUNT(*) FROM pending_uploads "
-               "WHERE status = 'pending' "
-               "AND (expires_at IS NULL OR expires_at > datetime('now'))")
+               "WHERE status = 'pending'")
         if not _current_user_is_admin():
             sql += ' AND (user_id IS NULL OR user_id = ?)'
             params.append(_current_username())
@@ -1250,6 +1249,19 @@ def _providers_from_form(form, existing_keys: dict | None = None) -> str:
     return serialize_providers(providers)
 
 
+def _persist_config(values: dict) -> None:
+    """Write settings and make this process read them back.
+
+    save_config only updates SQLite. Recipe extraction, the provider list and
+    the preview switch all read the in-memory Config snapshot from startup.
+    Without a reload, a saved provider name or a newly enabled preview comes
+    back as the previous value.
+    """
+    save_config(values)
+    from config import config as app_config
+    app_config.reload()
+
+
 @app.route('/api/ai/providers', methods=['GET'])
 @api_admin_required
 def api_ai_providers():
@@ -1261,6 +1273,11 @@ def api_ai_providers():
     from dataclasses import asdict
 
     from ai_providers import _COMPATIBLE_CATALOGS, API_TYPES, load_providers
+    from config import config as app_config
+
+    # The settings page renders this list, not the raw config row. Reload so
+    # a refresh shows what was just saved, not the snapshot from startup.
+    app_config.reload()
 
     return jsonify({
         'providers': [asdict(p) for p in load_providers()],
@@ -1345,7 +1362,7 @@ def settings():
         config['confirm_before_upload'] = 'true' if request.form.get(
             'confirm_before_upload') else 'false'
 
-        save_config(config)
+        _persist_config(config)
         get_job_manager().refresh_concurrency()
         flash('Settings saved successfully!', 'success')
         return redirect(url_for('settings'))
@@ -2149,15 +2166,29 @@ def api_post_config():
     filtered = {k: v for k, v in data.items() if k in valid_keys}
     if not filtered:
         return jsonify({'error': 'No valid configuration keys provided'}), 400
+    current = load_config()
     if 'ai_providers' in filtered:
         # Normalise before storing: a malformed registry would otherwise only
         # surface much later, as an extraction that cannot find its provider.
-        from ai_providers import parse_providers, serialize_providers
-        filtered['ai_providers'] = serialize_providers(
-            parse_providers(filtered['ai_providers']))
-    current = load_config()
+        # A blank key keeps the one already stored. The settings form posts
+        # password inputs that browsers and password managers often leave empty.
+        from dataclasses import asdict
+
+        from ai_providers import AiProvider, parse_providers, serialize_providers
+        existing_keys = {
+            provider.id: provider.api_key
+            for provider in parse_providers(current.get('ai_providers') or '')
+        }
+        merged = []
+        for provider in parse_providers(filtered['ai_providers']):
+            api_key = provider.api_key or existing_keys.get(provider.id, '')
+            if api_key != provider.api_key:
+                provider = AiProvider(**{**asdict(provider), 'api_key': api_key})
+            merged.append(provider)
+        filtered['ai_providers'] = serialize_providers(merged)
     current.update(filtered)
-    save_config(current)
+    _persist_config(current)
+    get_job_manager().refresh_concurrency()
     return jsonify({'status': 'success', 'saved_keys': list(filtered.keys())})
 
 
@@ -2209,7 +2240,7 @@ def import_settings():
     # Save the imported settings
     current_config = load_config()
     current_config.update(filtered_settings)
-    save_config(current_config)
+    _persist_config(current_config)
     
     return jsonify({
         'status': 'success',
@@ -2274,7 +2305,7 @@ def upload_cookies_file():
     # Update the configuration
     config = load_config()
     config['yt_dlp_cookies_file'] = cookies_path
-    save_config(config)
+    _persist_config(config)
     
     return jsonify({
         'status': 'success',
@@ -2300,7 +2331,7 @@ def delete_cookies_file():
     # Clear the configuration
     config = load_config()
     config['yt_dlp_cookies_file'] = ''
-    save_config(config)
+    _persist_config(config)
     
     return jsonify({
         'status': 'success',
@@ -2607,6 +2638,10 @@ def process_video_job(job_id, jm):
         return
 
     stats = PipelineStats()
+    # The preview switch is read here, before the pipeline's own reload.
+    # A save that only reached SQLite would otherwise skip the preview the
+    # settings page says is on.
+    app_config.reload()
 
     class Reporter:
         def is_cancelled(self):
@@ -2722,9 +2757,10 @@ def handle_cancel_upload(data):
     get_job_manager().reject_approval(upload_id)
 
 
-# Register pipeline handler and restore queued jobs from DB
-job_manager.set_process_func(process_video_job)
+# Resume first: restoring jobs can enqueue an already-approved upload, and
+# that worker claims the job only once the upload callback exists.
 job_manager.set_resume_func(resume_upload_job)
+job_manager.set_process_func(process_video_job)
 
 
 def _reemit_parked_previews() -> None:

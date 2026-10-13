@@ -29,7 +29,10 @@ logger = setup_logger(__name__)
 # of a second, equally wrong guess.
 FALLBACK_MODELS = {
     "openai": ["gpt-5-mini-2025-08-07", "gpt-4o-mini", "gpt-4o"],
-    "gemini": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+    # 2.5 models 404 for projects that have not used them before. 3.6 Flash is
+    # the model new Gemini API users can call; 3.8 and 3.5 Flash-Lite are the
+    # other current ids Google documents for new projects.
+    "gemini": ["gemini-3.6-flash", "gemini-3.8-flash", "gemini-3.5-flash-lite"],
     "anthropic": ["claude-sonnet-4-5", "claude-haiku-4-5"],
     "openai-compatible": [],
 }

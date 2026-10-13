@@ -70,12 +70,12 @@ API_TYPES: dict[str, dict[str, Any]] = {
         "needs_base_url": False,
         "default_base_url": "",
         "catalog": "google",
-        "example_model": "gemini-2.5-flash",
+        "example_model": "gemini-3.6-flash",
         "key_placeholder": "AIza...",
         "key_hint": (
             "Create a key in Google AI Studio and paste it here. A Gemini "
             "Pro or Advanced subscription in the Gemini app does not include "
-            "an API key. Then set the model to gemini-2.5-flash, save, and "
+            "an API key. Then set the model to gemini-3.6-flash, save, and "
             "choose this provider under AI Extraction. Gemini reads the "
             "video and the on-screen text. Set Speech to Text to Off, "
             "because Gemini cannot transcribe audio."

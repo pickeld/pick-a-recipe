@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from werkzeug.datastructures import MultiDict
 
@@ -96,6 +97,14 @@ class SettingsRoundTripTests(unittest.TestCase):
             session['is_admin'] = True
         return client
 
+    def _legacy_settings_html(self, client):
+        """The HTML form, even when a built SPA would otherwise be served."""
+        import app as server
+
+        missing = os.path.join(tempfile.mkdtemp(), 'no-frontend')
+        with patch.object(server, 'FRONTEND_DIST', missing):
+            return client.get('/settings').get_data(as_text=True)
+
     def test_saved_providers_are_what_extraction_then_uses(self):
         import ai_providers
         from config import config
@@ -160,16 +169,66 @@ class SettingsRoundTripTests(unittest.TestCase):
         self.assertEqual(config.TRANSCRIPTION_MODE, 'off')
         self.assertIsNone(ai_providers.transcription_provider())
 
-        body = client.get('/settings').get_data(as_text=True)
+        body = self._legacy_settings_html(client)
         self.assertIn('Off (on-screen text only)', body)
         self.assertIn('value="off" selected', body)
 
     def test_the_settings_page_renders_the_new_sections(self):
-        body = self._client().get('/settings').get_data(as_text=True)
+        body = self._legacy_settings_html(self._client())
         self.assertIn('AI Providers', body)
         self.assertIn('AI Extraction', body)
         self.assertIn('Speech to Text', body)
         self.assertIn('provider_api_type[]', body)
+
+    def test_api_save_is_what_a_refresh_reads_back(self):
+        """A renamed provider must survive a refresh of the settings page.
+
+        The page reads the provider list from the running process, not straight
+        from SQLite. A save that only wrote the database used to show the old
+        name again.
+        """
+        import ai_providers
+
+        client = self._client()
+        saved = client.post('/api/config', json={
+            'ai_providers': json.dumps([{
+                'id': 'gemini',
+                'name': 'Renamed Gemini',
+                'api_type': 'gemini',
+                'api_key': 'gk',
+                'base_url': '',
+                'model': 'gemini-3.6-flash',
+            }]),
+        })
+        self.assertEqual(saved.status_code, 200)
+
+        listed = client.get('/api/ai/providers').get_json()
+        names = [provider['name'] for provider in listed['providers']]
+        self.assertIn('Renamed Gemini', names)
+        loaded = next(
+            provider for provider in ai_providers.load_providers()
+            if provider.id == 'gemini'
+        )
+        self.assertEqual(loaded.name, 'Renamed Gemini')
+
+        # A blank password field is not a request to delete the key.
+        kept = client.post('/api/config', json={
+            'ai_providers': json.dumps([{
+                'id': 'gemini',
+                'name': 'Renamed Gemini',
+                'api_type': 'gemini',
+                'api_key': '',
+                'base_url': '',
+                'model': 'gemini-3.6-flash',
+            }]),
+        })
+        self.assertEqual(kept.status_code, 200)
+        after = next(
+            provider for provider in ai_providers.load_providers()
+            if provider.id == 'gemini'
+        )
+        self.assertEqual(after.api_key, 'gk')
+        self.assertEqual(after.name, 'Renamed Gemini')
 
     def test_the_api_serves_the_registry_and_the_dialects(self):
         payload = self._client().get('/api/ai/providers').get_json()

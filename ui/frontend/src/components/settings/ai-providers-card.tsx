@@ -94,7 +94,7 @@ export function AiProvidersCard({
   const { data } = useQuery({
     queryKey: ['aiProviders'],
     queryFn: api.aiProviders,
-    staleTime: Infinity,
+    staleTime: 30_000,
   })
 
   // The server does the legacy-settings migration, so the first render adopts

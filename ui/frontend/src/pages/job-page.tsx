@@ -95,7 +95,7 @@ export function JobPage() {
         if (data.job_id !== jobId) return
         invalidate()
         toast.error(data.error?.trim() || 'The job failed.', {
-          duration: 20000,
+          duration: Infinity,
           id: `job-failed-${data.job_id}`,
         })
       },
@@ -226,7 +226,7 @@ export function JobPage() {
                     }
               }
               onRetry={
-                job.status === 'failed' && !retrying
+                (job.status === 'failed' || job.status === 'expired') && !retrying
                   ? () => {
                       void handleRetry()
                     }

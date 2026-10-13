@@ -1118,7 +1118,11 @@ def find_stranded_approvals() -> List[str]:
     """Awaiting-approval jobs whose approval row resolved without them.
 
     Catches jobs stranded between the sweeper's two writes (upload row
-    flipped, job state not yet updated) or any similar partial teardown.
+    flipped to expired, job state not yet updated) or any similar teardown.
+
+    A ``confirmed`` row is not stranded: the user already approved it and the
+    upload worker has not claimed the job yet. Treating that as expired
+    cancelled the upload and left nothing in Mealie.
     """
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1127,7 +1131,8 @@ def find_stranded_approvals() -> List[str]:
             WHERE rj.status = 'awaiting_approval'
             AND NOT EXISTS (
                 SELECT 1 FROM pending_uploads pu
-                WHERE pu.job_id = rj.id AND pu.status = 'pending'
+                WHERE pu.job_id = rj.id
+                  AND pu.status IN ('pending', 'confirmed')
             )
         ''')
         return [r['id'] for r in cursor.fetchall()]
@@ -1196,25 +1201,12 @@ def sweep_stale_leases(*, max_attempts: int = 3,
 
 
 def expire_due_approvals() -> List[str]:
-    """Flip due pending uploads to 'expired'; return affected job ids."""
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, job_id FROM pending_uploads
-            WHERE status = 'pending'
-            AND expires_at IS NOT NULL
-            AND expires_at <= datetime('now')
-        ''')
-        due = cursor.fetchall()
-        if not due:
-            return []
-        ids = [r['id'] for r in due]
-        marks = ','.join('?' for _ in ids)
-        cursor.execute(
-            f"UPDATE pending_uploads SET status = 'expired' "
-            f'WHERE id IN ({marks})', ids)
-        conn.commit()
-        return [r['job_id'] for r in due]
+    """Approvals are not limited by time.
+
+    A recipe stays in ``awaiting_approval`` until someone confirms or rejects
+    it. Kept so the sweeper can still call one function for this pass.
+    """
+    return []
 
 
 def list_jobs_by_states(states: List[str], *, user_id: Optional[str] = None,
@@ -1301,9 +1293,14 @@ def update_job_priority(job_id: str, priority: int, *,
 def create_pending_upload(upload_id: str, job_id: str, recipe_data: Dict,
                           image_path: Optional[str], image_candidates: List[str],
                           output_target: str, best_image_index: int = 0,
-                          timeout_minutes: int = 5,
+                          timeout_minutes: int | None = None,
                           user_id: Optional[str] = None) -> bool:
-    """Create a pending upload waiting for confirmation."""
+    """Create a pending upload waiting for confirmation.
+
+    There is no approval deadline. ``timeout_minutes`` is accepted so existing
+    callers keep working, and it is not stored.
+    """
+    del timeout_minutes
     with get_db() as conn:
         cursor = conn.cursor()
         recipe_json = json.dumps(recipe_data)
@@ -1312,11 +1309,9 @@ def create_pending_upload(upload_id: str, job_id: str, recipe_data: Dict,
             INSERT INTO pending_uploads
             (id, job_id, recipe_data, image_path, image_candidates, output_target,
              selected_image_index, best_image_index, status, expires_at, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending',
-                    datetime('now', '+' || ? || ' minutes'), ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?)
         ''', (upload_id, job_id, recipe_json, image_path, candidates_json,
-              output_target, best_image_index, best_image_index, timeout_minutes,
-              user_id))
+              output_target, best_image_index, best_image_index, user_id))
         conn.commit()
         return True
 
@@ -1387,8 +1382,7 @@ def get_pending_uploads(*, user_id: Optional[str] = None,
             SELECT pu.*, rj.url, rj.video_title
             FROM pending_uploads pu
             LEFT JOIN recipe_jobs rj ON pu.job_id = rj.id
-            WHERE pu.status = 'pending'
-            AND (pu.expires_at IS NULL OR pu.expires_at > datetime('now')){owner_sql}
+            WHERE pu.status = 'pending'{owner_sql}
             ORDER BY pu.created_at DESC
         ''', owner_params)
         results = []
@@ -1468,18 +1462,8 @@ def delete_pending_upload(upload_id: str) -> bool:
 
 
 def cleanup_expired_pending_uploads() -> int:
-    """Clean up expired pending uploads."""
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE pending_uploads
-            SET status = 'expired'
-            WHERE status = 'pending'
-            AND expires_at IS NOT NULL
-            AND expires_at < datetime('now')
-        ''')
-        conn.commit()
-        return cursor.rowcount
+    """Approvals are not expired on a timer. Returns 0."""
+    return 0
 
 
 def save_push_subscription(username: str, endpoint: str, p256dh: str, auth_key: str) -> bool:

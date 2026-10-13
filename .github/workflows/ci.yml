@@ -70,6 +70,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Test
+        run: npm test
+
       - name: Build
         # Runs tsc -b before vite build, so this is the type check too. The
         # image build does the same, meaning a type error here would otherwise

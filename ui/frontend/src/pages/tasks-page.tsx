@@ -252,24 +252,6 @@ function relativeTime(dateStr: string): string {
   return date.toLocaleDateString()
 }
 
-// ===== Expiry countdown =====
-
-function useExpiryCountdown(isoStr: string): { text: string; expiring: boolean } {
-  const [now, setNow] = useState(Date.now())
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
-
-  if (!isoStr) return { text: '', expiring: false }
-  const ms = new Date(isoStr.replace(' ', 'T') + (isoStr.endsWith('Z') ? '' : 'Z')).getTime() - now
-  if (isNaN(ms)) return { text: '', expiring: false }
-  if (ms <= 0) return { text: 'expired', expiring: true }
-  const m = Math.floor(ms / 60000)
-  const s = Math.floor((ms % 60000) / 1000)
-  return { text: `${m}:${String(s).padStart(2, '0')}`, expiring: ms < 60000 }
-}
-
 // ===== Status badge =====
 
 function StatusBadge({ status }: { status: string }) {
@@ -327,18 +309,6 @@ function ApprovalGallery({ uploadId, onTitleResolved, selectedIndex, onSelectInd
         <ImagePicker images={candidates} value={selectedIndex} onChange={onSelectIndex} />
       )}
     </div>
-  )
-}
-
-// ===== Per-row expiry display =====
-
-function ExpiryChip({ isoStr }: { isoStr: string }) {
-  const { text, expiring } = useExpiryCountdown(isoStr)
-  if (!text) return null
-  return (
-    <span className={cn('font-mono text-xs tabular-nums', expiring && 'text-destructive')}>
-      {text}
-    </span>
   )
 }
 
@@ -697,9 +667,6 @@ function TaskRowItem({
               #{row.queuePosition}
             </Badge>
           )}
-          {isApproval && row.approvalExpiresAt && (
-            <ExpiryChip isoStr={row.approvalExpiresAt} />
-          )}
         </div>
 
         {isApproval && row.pendingUploadId && (
@@ -726,7 +693,7 @@ function TaskRowItem({
           </p>
         )}
 
-        {row.kind === 'history' && row.status === 'failed' && row.error && (
+        {(row.status === 'failed' || row.status === 'expired') && row.error && (
           <p className="text-xs text-destructive whitespace-pre-wrap break-words">{row.error}</p>
         )}
       </div>
@@ -741,7 +708,7 @@ function TaskRowItem({
             Approve
           </Button>
         )}
-        {row.status === 'failed' && (
+        {(row.status === 'failed' || row.status === 'expired') && (
           <Button
             size="sm"
             variant="secondary"

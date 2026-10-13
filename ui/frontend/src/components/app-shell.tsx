@@ -1,12 +1,30 @@
+import { useCallback } from 'react'
+import { Outlet, useLocation } from 'react-router-dom'
+import { toast } from 'sonner'
+
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { AppSidebar } from '@/components/app-sidebar'
+import { RecipePreviewHost } from '@/components/recipe-preview-host'
 import { Separator } from '@/components/ui/separator'
-import { Outlet, useLocation } from 'react-router-dom'
+import { useSocketEvent } from '@/lib/socket'
+import type { JobFailedPayload } from '@/types'
 
 const TITLES: Record<string, string> = {
   '/': 'Extract a Recipe',
   '/tasks': 'Tasks',
   '/settings': 'Settings',
+}
+
+function JobFailureNotice() {
+  useSocketEvent(
+    'job_failed',
+    useCallback((payload: JobFailedPayload) => {
+      const message = payload.error?.trim() || 'The job failed.'
+      // Stay up until dismissed. A short toast was gone before it could be read.
+      toast.error(message, { duration: Infinity, id: `job-failed-${payload.job_id}` })
+    }, []),
+  )
+  return null
 }
 
 export function AppShell() {
@@ -17,6 +35,8 @@ export function AppShell() {
 
   return (
     <SidebarProvider>
+      <JobFailureNotice />
+      <RecipePreviewHost />
       <AppSidebar />
       <SidebarInset>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">

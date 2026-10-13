@@ -158,7 +158,7 @@ class TestHeartbeatExtend(unittest.TestCase):
 
 
 class TestApprovalExpirySweep(unittest.TestCase):
-    def test_due_approval_expires_job_and_upload(self):
+    def test_a_past_deadline_does_not_expire_the_approval(self):
         from database import (
             create_pending_upload, expire_due_approvals, get_db,
             get_pending_upload,
@@ -181,16 +181,47 @@ class TestApprovalExpirySweep(unittest.TestCase):
             jm.transition(jid, AWAITING_APPROVAL, percent=90)
 
             expired_jobs = expire_due_approvals()
-            self.assertIn(jid, expired_jobs)
+            self.assertEqual(expired_jobs, [])
 
             result = jm.sweep_once()
-            # The row was flipped outside the sweeper, so its job was
-            # temporarily stranded; sweep_once must reconcile it.
-            self.assertEqual(result.get('expired', 0), 1)
+            self.assertEqual(result.get('expired', 0), 0)
 
-            self.assertEqual(get_pending_upload(up)['status'], 'expired')
+            self.assertEqual(get_pending_upload(up)['status'], 'pending')
             from database import get_job
-            self.assertEqual(get_job(jid)['status'], 'expired')
+            self.assertEqual(get_job(jid)['status'], AWAITING_APPROVAL)
+        finally:
+            _purge(jid)
+            _sql('DELETE FROM pending_uploads WHERE id = ?', (up,))
+
+    def test_confirmed_upload_is_not_expired_while_it_waits_to_upload(self):
+        """Approving must not look like an abandoned approval.
+
+        The sweeper used to treat every non-pending row as stranded, so a
+        confirmed recipe was marked expired before Mealie ever saw it.
+        """
+        from database import (
+            confirm_pending_upload, create_pending_upload, get_job,
+            get_pending_upload,
+        )
+        from job_manager import AWAITING_APPROVAL, JobManager, RUNNING
+
+        jm = JobManager(FakeSocketIO())
+        jid = jm.create_new_job('https://example.com/confirmed', user_id='alice')
+        up = 'up_' + os.urandom(8).hex()
+        create_pending_upload(
+            upload_id=up, job_id=jid, recipe_data={'name': 'Kept'},
+            image_path=None, image_candidates=[], output_target='mealie',
+            best_image_index=0, timeout_minutes=5, user_id='alice',
+        )
+        try:
+            jm.transition(jid, RUNNING, expected_old='queued')
+            jm.transition(jid, AWAITING_APPROVAL, percent=90)
+            self.assertTrue(confirm_pending_upload(up, 0))
+
+            jm.sweep_once()
+
+            self.assertEqual(get_pending_upload(up)['status'], 'confirmed')
+            self.assertEqual(get_job(jid)['status'], AWAITING_APPROVAL)
         finally:
             _purge(jid)
             _sql('DELETE FROM pending_uploads WHERE id = ?', (up,))

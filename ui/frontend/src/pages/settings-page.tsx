@@ -163,8 +163,16 @@ export function SettingsPage() {
     try {
       await api.saveConfig(draft)
       toast.success('Settings saved')
+      if (providers) {
+        queryClient.setQueryData(
+          ['aiProviders'],
+          (current: { providers: AiProvider[] } | undefined) =>
+            current ? { ...current, providers } : current,
+        )
+      }
       reset()
       await queryClient.invalidateQueries({ queryKey: ['config'] })
+      await queryClient.invalidateQueries({ queryKey: ['aiProviders'] })
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save settings')
     } finally {

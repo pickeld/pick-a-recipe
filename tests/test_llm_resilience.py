@@ -12,6 +12,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from llm_resilience import (  # noqa: E402
+    FALLBACK_MODELS,
     ModelUnavailableError,
     call_with_model_fallback,
     candidate_models,
@@ -90,8 +91,40 @@ class CallWithModelFallbackTests(unittest.TestCase):
         result, used = call_with_model_fallback(
             "gemini", "gemini-2.0-flash", call, persist=False)
         self.assertEqual(result, "recovered")
-        self.assertEqual(used, "gemini-2.5-flash")
-        self.assertEqual(attempted[:2], ["gemini-2.0-flash", "gemini-2.5-flash"])
+        self.assertEqual(used, "gemini-3.6-flash")
+        self.assertEqual(attempted[:2], ["gemini-2.0-flash", "gemini-3.6-flash"])
+
+    def test_a_new_gemini_project_does_not_die_on_retired_2_5_models(self):
+        """Issue #54: 2.5 Flash 404s, and the old chain stopped on Flash-Lite."""
+        gone = (
+            "404 NOT_FOUND. This model models/gemini-2.5-flash is no longer "
+            "available to new users. Please update your code to use a newer model"
+        )
+        self.assertTrue(is_model_unavailable_error(Exception(gone)))
+        attempted = []
+
+        def call(model):
+            attempted.append(model)
+            if "2.5" in model or "2.0" in model:
+                raise Exception(gone.replace("gemini-2.5-flash", model))
+            return "recipe"
+
+        result, used = call_with_model_fallback(
+            "gemini", "gemini-2.5-flash", call, persist=False)
+        self.assertEqual(result, "recipe")
+        self.assertEqual(used, "gemini-3.6-flash")
+        self.assertEqual(attempted[:2], ["gemini-2.5-flash", "gemini-3.6-flash"])
+        self.assertNotIn("gemini-2.5-pro", attempted)
+        self.assertNotIn("gemini-2.5-flash-lite", attempted)
+
+    def test_defaults_point_new_users_at_a_current_gemini_model(self):
+        from ai_providers import API_TYPES
+        from config import DEFAULT_CONFIG
+
+        self.assertEqual(DEFAULT_CONFIG["gemini_model"], "gemini-3.6-flash")
+        self.assertEqual(API_TYPES["gemini"]["example_model"], "gemini-3.6-flash")
+        self.assertNotIn("gemini-2.5-flash-lite", FALLBACK_MODELS["gemini"])
+        self.assertEqual(FALLBACK_MODELS["gemini"][0], "gemini-3.6-flash")
 
     def test_non_model_error_is_reraised_immediately(self):
         attempted = []

@@ -44,6 +44,7 @@ from database import (
     update_job_tokens,
     create_pending_upload,
     get_pending_upload,
+    get_pending_upload_by_job,
     get_pending_uploads,
     cancel_pending_upload,
     DATA_DIR,
@@ -262,14 +263,20 @@ class JobManager:
                     if self._process_func:
                         self._process_func(job_id, self)
                 elif phase == 'upload':
+                    # Restore can enqueue an upload before the resume callback
+                    # is wired. Claiming the job first would move it to
+                    # 'uploading' and then drop the recipe on the floor.
+                    if self._resume_func is None:
+                        self._work_queue.put((job_id, 'upload'))
+                        time.sleep(0.05)
+                        continue
                     if not self.transition(
                         job_id, UPLOADING, expected_old=AWAITING_APPROVAL,
                         stage_message='Uploading approved recipe...',
                         with_lease_minutes=self.LEASE_MINUTES,
                     ):
                         continue
-                    if self._resume_func:
-                        self._resume_func(job_id, self)
+                    self._resume_func(job_id, self)
             except Exception as exc:
                 self.fail_job(job_id, f'Worker error: {exc}')
             finally:
@@ -285,8 +292,12 @@ class JobManager:
                 job_id = job['id']
                 status = job['status']
                 if status == AWAITING_APPROVAL:
-                    # Artifact lives in pending_uploads; owner re-emits
-                    # previews at startup. Nothing to redo here.
+                    # Still waiting on the user: the preview is re-emitted
+                    # at startup. Already approved: the upload worker has to
+                    # run again or the recipe never reaches Mealie.
+                    upload = get_pending_upload_by_job(job_id)
+                    if upload and upload.get('status') == 'confirmed':
+                        self._work_queue.put((job_id, 'upload'))
                     continue
                 if status == QUEUED:
                     with self._lock:
@@ -539,7 +550,7 @@ class JobManager:
         image_candidates: list,
         output_target: str,
         best_image_index: int = 0,
-        timeout_minutes: int = 5,
+        timeout_minutes: int | None = None,
     ) -> Optional[str]:
         """Park a finished-extraction job in awaiting_approval.
 
@@ -579,19 +590,13 @@ class JobManager:
             delete_pending_upload(upload_id)
             return None
 
-        # The one notification users actually need: approvals expire, so a
-        # missed one costs them the extraction entirely.
         recipe_name = recipe_data.get('name') or (job or {}).get('video_title') or 'A recipe'
         notify_user(
             user_id,
             title='Recipe needs your approval',
-            body=f'{recipe_name} is ready to review, and expires in '
-                 f'{timeout_minutes} minutes.',
+            body=f'{recipe_name} is ready to review.',
             url=f'/jobs/{job_id}',
             tag=f'job-{job_id}',
-            # Pointless to deliver once the approval window has closed: the
-            # notification would ask for a decision that no longer exists.
-            ttl=timeout_minutes * 60,
         )
         return upload_id
 
@@ -733,7 +738,7 @@ class JobManager:
             if get_job(job_id):
                 try:
                     self.transition(job_id, EXPIRED,
-                                    reason='Approval window elapsed')
+                                    reason='Approval is no longer open')
                 except InvalidTransition:
                     pass
         if result.get('requeued'):

@@ -297,23 +297,20 @@ class TestJobLifecycleHooks(unittest.TestCase):
         self.assertEqual(kwargs['title'], 'Recipe failed')
         self.assertIn('Transcription timed out', kwargs['body'])
 
-    def test_approval_warns_about_the_deadline(self):
+    def test_approval_asks_for_a_review_without_a_deadline(self):
         job_id = self._job()
         self.jm.transition(job_id, self.job_manager.RUNNING)
 
         self.jm.open_approval(
-            job_id, {'name': 'Shakshuka'}, None, [], 'mealie', timeout_minutes=7,
+            job_id, {'name': 'Shakshuka'}, None, [], 'mealie',
         )
 
         username, kwargs = self.sent[-1]
         self.assertEqual(username, 'alice')
         self.assertIn('approval', kwargs['title'].lower())
-        # Missing an approval loses the extraction, so the window has to be
-        # in the notification itself.
-        self.assertIn('7', kwargs['body'])
-        # And it must not outlive that window: arriving late, it would ask for
-        # a decision the server has already given up on.
-        self.assertEqual(kwargs['ttl'], 7 * 60)
+        self.assertIn('Shakshuka', kwargs['body'])
+        self.assertNotIn('expires', kwargs['body'].lower())
+        self.assertNotIn('ttl', kwargs)
 
     def test_all_three_collapse_onto_one_notification_per_job(self):
         job_id = self._job()

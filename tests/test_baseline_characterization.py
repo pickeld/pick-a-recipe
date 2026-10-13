@@ -166,14 +166,14 @@ class TestPendingUploads(unittest.TestCase):
         self.assertFalse(cancel_pending_upload(upload_id))
         self.assertFalse(confirm_pending_upload(upload_id))
 
-    def test_expiry_sweep_marks_expired(self):
+    def test_a_past_timestamp_does_not_expire_an_approval(self):
         from database import (
             cleanup_expired_pending_uploads, get_pending_upload,
         )
         upload_id = self._mk(timeout=-1)
         swept = cleanup_expired_pending_uploads()
-        self.assertGreaterEqual(swept, 1)
-        self.assertEqual(get_pending_upload(upload_id)['status'], 'expired')
+        self.assertEqual(swept, 0)
+        self.assertEqual(get_pending_upload(upload_id)['status'], 'pending')
 
 
 class TestActiveJobsFiltering(unittest.TestCase):
