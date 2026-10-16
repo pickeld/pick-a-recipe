@@ -135,6 +135,33 @@ class SlotFreeApprovalTestCase(unittest.TestCase):
             jid, {'name': f'recipe-{jid[:6]}'}, None, [], 'mealie')
         return jid, upload_id
 
+    def test_preview_progress_keeps_the_approval(self):
+        """The preview progress line must not consume the approval transition.
+
+        Doing that deleted the pending upload, left the job as "Needs
+        approval" with no Approve button, and the sweeper then expired it.
+        """
+        jid = self.jm.create_new_job('https://example.com/preview', user_id='alice')
+        upload_id = None
+        try:
+            self.jm.transition(jid, RUNNING, expected_old=QUEUED)
+            self.jm.update_progress(
+                jid, 'preview', 'Waiting for your confirmation...', 90)
+            self.assertEqual(get_job(jid)['status'], RUNNING)
+            with self.assertLogs('jobs', level='INFO') as captured:
+                upload_id = self.jm.open_approval(
+                    jid, {'name': 'Pasta al forno'}, None, [], 'Mealie')
+            self.assertTrue(upload_id)
+            self.assertEqual(get_pending_upload(upload_id)['status'], 'pending')
+            self.assertEqual(get_job(jid)['status'], AWAITING_APPROVAL)
+            text = '\n'.join(captured.output)
+            self.assertIn('Nothing has been sent to Mealie yet', text)
+            self.assertIn('Pasta al forno', text)
+        finally:
+            _purge_jobs([jid])
+            if upload_id:
+                _purge_uploads(upload_id)
+
     def test_parked_approval_frees_slot_for_next_job(self):
         parked, upload_id = self._park('https://example.com/park', 'alice')
         follower = self.jm.create_new_job('https://example.com/follow',
