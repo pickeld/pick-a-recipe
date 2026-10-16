@@ -222,6 +222,10 @@ export function JobCard({ job, onCancel, onRetry, href }: JobCardProps) {
                 Retry
               </Button>
             )}
+            <p className="text-xs text-muted-foreground">
+              To report this, set <span className="font-mono">LOG_LEVEL=debug</span>, restart,
+              repeat it, and paste the container log into a bug report.
+            </p>
           </div>
         )}
       </CardContent>

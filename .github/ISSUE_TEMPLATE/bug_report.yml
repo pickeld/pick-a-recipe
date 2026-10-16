@@ -1,0 +1,84 @@
+name: Bug report
+description: Something went wrong. Version, operating system, and a log are required.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please fill every field. A report without the version, the operating system, and a log leaves us guessing which step stopped.
+
+        Repeat the problem once, then paste the container log:
+
+        - Docker: `docker logs pick-a-recipe --since 30m`
+        - Portainer: open the container and copy its log view
+
+        Read the paste before you send it, and take out any API key or password.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw on screen, including the status words (for example "Needs approval" or "Expired").
+      placeholder: I pasted a video URL. The task sat on Needs approval, and I could not tell where to approve it. A while later it said Expired.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the kind of URL (YouTube, TikTok, a recipe page).
+      placeholder: |
+        1. Paste a YouTube cooking video on the home page.
+        2. Wait until the task changes status.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: The release or image tag, for example v1.9.6. In Portainer this is the image tag on the container.
+      placeholder: v1.9.6
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: The machine the app runs on, including a NAS model if that is where it runs.
+      placeholder: Ubuntu 24.04, or UGREEN DXP2800
+    validations:
+      required: true
+  - type: dropdown
+    id: where-it-runs
+    attributes:
+      label: How this instance runs
+      options:
+        - Docker
+        - Docker Compose
+        - Portainer or another NAS panel
+        - Directly on the machine, without Docker
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: Paste the container log from when you repeated the problem. Docker `docker logs pick-a-recipe --since 30m`, or the Portainer log view.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I repeated the problem and pasted the log from that run.
+          required: true
+        - label: I checked the log and it does not contain an API key, password, or cookie.
+          required: true

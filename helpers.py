@@ -1,6 +1,10 @@
 from config import config
 import logging
+import os
 import re
+import threading
+from collections import deque
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -10,34 +14,244 @@ from urllib3.util.retry import Retry
 # Logging Configuration
 # ==============================================================================
 
+# LOG_LEVEL in the environment. debug is what a bug report needs; info is the
+# default. A change applies on the next start of the process.
+LOG_LEVEL_NAMES = ('warning', 'info', 'debug')
+_LEVEL_BY_NAME = {
+    'warning': logging.WARNING,
+    'info': logging.INFO,
+    'debug': logging.DEBUG,
+}
+
+# Newest lines kept in the process, already redacted. The copy a reporter
+# pastes comes from the container log, which is the same stream.
+_LOG_RING_CAPACITY = 500
+
+_LOG_FORMAT = logging.Formatter(
+    '%(asctime)s - %(name)s - %(funcName)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+
+# Assignment-style secrets: api_key=..., "token": "...", Authorization: Bearer.
+_SECRET_ASSIGNMENT = re.compile(
+    r'(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|'
+    r'password|passwd|secret|authorization|cookie|vapid[_-]?private[_-]?key)'
+    r'\b\s*[=:]\s*)([^\s,;]+)'
+)
+_BEARER = re.compile(r'(?i)\bBearer\s+\S+')
+_URL_SECRET = re.compile(
+    r'(?i)([?&](?:api[_-]?key|access[_-]?token|token|password|secret|key)=)[^&\s]+'
+)
+_WELL_KNOWN_SECRET = re.compile(
+    r'\b(?:sk-[A-Za-z0-9_\-]{8,}|AIza[0-9A-Za-z_\-]{20,}|'
+    r'gh[pousr]_[A-Za-z0-9]{8,}|'
+    r'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)'
+)
+
+# Config values that are credentials. Hosts and model names stay visible:
+# a bug report needs them, and they are not keys.
+_SECRET_CONFIG_KEYS = (
+    'openai_api_key',
+    'gemini_api_key',
+    'openrouter_api_key',
+    'mealie_api_key',
+    'tandoor_api_key',
+    'hf_token',
+    'vapid_private_key',
+)
+
+_level_override: str | None = None
+_ring: '_RingHandler | None' = None
+# Loggers this module configured. Level changes touch only these, so a
+# library logger that already has a handler is left alone.
+_managed_loggers: set[str] = set()
+
+
+def normalize_log_level(raw: str | None) -> str:
+    """Map LOG_LEVEL onto warning, info, or debug."""
+    name = (raw or '').strip().lower()
+    if name in ('debug', 'verbose'):
+        return 'debug'
+    if name in ('warning', 'warn', 'quiet'):
+        return 'warning'
+    return 'info'
+
+
+def _active_level_name() -> str:
+    if _level_override in _LEVEL_BY_NAME:
+        return _level_override
+    return normalize_log_level(os.environ.get('LOG_LEVEL'))
+
+
+def _formatter() -> logging.Formatter:
+    return _LOG_FORMAT
+
+
+class _RingHandler(logging.Handler):
+    """Keep the newest log lines so Settings can hand them to a bug report."""
+
+    def __init__(self, capacity: int) -> None:
+        super().__init__()
+        self._lines: deque[str] = deque(maxlen=capacity)
+        self._lines_lock = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            line = self.format(record)
+        except Exception:
+            return
+        with self._lines_lock:
+            self._lines.append(line)
+
+    def snapshot(self) -> list[str]:
+        with self._lines_lock:
+            return list(self._lines)
+
+    def clear(self) -> None:
+        with self._lines_lock:
+            self._lines.clear()
+
+
+def _ring_handler() -> _RingHandler:
+    global _ring
+    if _ring is None:
+        _ring = _RingHandler(_LOG_RING_CAPACITY)
+        _ring.setFormatter(_formatter())
+        _ring.addFilter(_RedactFilter())
+    return _ring
+
+
+def _configured_secrets() -> list[str]:
+    """Credential values currently stored for this instance.
+
+    Read at format time so a key saved after startup is still stripped.
+    Short values are skipped: replacing them would punch holes in ordinary words.
+    The values are used only as search needles. They are never written to a log.
+    """
+    found: list[str] = []
+    try:
+        values = [getattr(config, key.upper(), '') for key in _SECRET_CONFIG_KEYS]
+        raw_providers = config.AI_PROVIDERS
+    except Exception:
+        return found
+    for value in values:
+        if isinstance(value, str) and len(value) >= 8:
+            found.append(value)
+    if isinstance(raw_providers, str) and raw_providers:
+        try:
+            import json
+            records = json.loads(raw_providers)
+        except (TypeError, ValueError):
+            records = []
+        if isinstance(records, list):
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                api_key = record.get('api_key') or ''
+                if isinstance(api_key, str) and len(api_key) >= 8:
+                    found.append(api_key)
+    return found
+
+
+def redact_text(text: str) -> str:
+    """Remove credentials from a log line before it is stored or shown.
+
+    The copied log is what people paste into a public GitHub issue, so a key
+    that reached a log message must not survive into that text. No credential
+    is written here; values come from the instance config at format time.
+    """
+    cleaned = text.replace('\r', ' ').replace('\n', ' ')
+    for secret in sorted(set(_configured_secrets()), key=len, reverse=True):
+        cleaned = cleaned.replace(secret, '[redacted]')
+    cleaned = _BEARER.sub('Bearer [redacted]', cleaned)
+    cleaned = _URL_SECRET.sub(r'\1[redacted]', cleaned)
+    cleaned = _SECRET_ASSIGNMENT.sub(r'\1[redacted]', cleaned)
+    cleaned = _WELL_KNOWN_SECRET.sub('[redacted]', cleaned)
+    return cleaned
+
+
+class _RedactFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        cleaned = redact_text(record.getMessage())
+        record.msg = cleaned
+        record.args = None
+        record.message = cleaned
+        return True
+
+
+def _attach(logger: logging.Logger, level: int) -> None:
+    _managed_loggers.add(logger.name)
+    logger.setLevel(level)
+    # Each app logger owns its handlers. Propagating would print twice once
+    # a root handler exists, and library loggers stay on their own.
+    logger.propagate = False
+    stream = next(
+        (handler for handler in logger.handlers
+         if isinstance(handler, logging.StreamHandler)
+         and not isinstance(handler, _RingHandler)),
+        None,
+    )
+    if stream is None:
+        stream = logging.StreamHandler()
+        stream.setFormatter(_formatter())
+        stream.addFilter(_RedactFilter())
+        logger.addHandler(stream)
+    ring = _ring_handler()
+    if ring not in logger.handlers:
+        logger.addHandler(ring)
+    for handler in logger.handlers:
+        handler.setLevel(level)
+
+
 def setup_logger(name: str) -> logging.Logger:
     """Create and configure a logger with time, function name, and severity.
-    
-    Args:
-        name: Name of the logger (typically __name__).
-        
-    Returns:
-        Configured logger instance.
+
+    The level follows the LOG_LEVEL environment variable. debug is what a bug
+    report asks for; info is the default.
     """
     logger = logging.getLogger(name)
-    
-    # Only configure if not already configured
-    if not logger.handlers:
-        logger.setLevel(logging.INFO)
-        
-        # Create console handler
-        handler = logging.StreamHandler()
-        handler.setLevel(logging.INFO)
-        
-        # Create formatter with time, name, function, severity
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(funcName)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    
+    _attach(logger, _LEVEL_BY_NAME[_active_level_name()])
     return logger
+
+
+def apply_log_level(raw: str | None = None) -> str:
+    """Apply LOG_LEVEL from the environment, or an explicit value in tests.
+
+    Called once at startup. Returns the canonical name (warning, info, or debug).
+    """
+    global _level_override
+    if raw is None:
+        name = normalize_log_level(os.environ.get('LOG_LEVEL'))
+    else:
+        name = normalize_log_level(raw)
+    _level_override = name
+    level = _LEVEL_BY_NAME[name]
+    for logger_name in list(_managed_loggers):
+        _attach(logging.getLogger(logger_name), level)
+    return name
+
+
+def recent_log_lines() -> list[str]:
+    """Newest retained log lines, already redacted by the handler filter."""
+    return _ring_handler().snapshot()
+
+
+def recent_log_text() -> str:
+    """Text block for the clipboard and for a GitHub bug report."""
+    lines = recent_log_lines()
+    header = [
+        'pick-a-recipe diagnostic log',
+        f'log_level: {_active_level_name()}',
+        f'lines: {len(lines)}',
+        'Credentials are removed before this text is shown. Read it once before posting.',
+        '---',
+    ]
+    return '\n'.join(header + lines)
+
+
+def clear_recent_logs() -> None:
+    """Drop the retained lines. Used by tests."""
+    _ring_handler().clear()
 
 
 # ==============================================================================

@@ -1,0 +1,22 @@
+name: Feature request
+description: An idea for something the app should do. No log required.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use a bug report instead when something already in the app misbehaved. That form asks for the version, the operating system, and a log.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, not the design. A sentence or two is enough.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+    validations:
+      required: true
