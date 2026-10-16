@@ -51,15 +51,14 @@ def upload_recipe_to_targets(recipe_data: dict,
     targets = get_enabled_targets()
     if not targets:
         logger.info(
-            '[Upload] "%s" was not sent. No recipe manager is enabled. '
-            'Enable Mealie or Tandoor in Settings.',
-            name,
+            f'[Upload] "{name}" was not sent. No recipe manager is enabled. '
+            'Enable Mealie or Tandoor in Settings.'
         )
         return 'none', [('none',
                          'No recipe manager is enabled — enable Mealie and/or '
                          'Tandoor in Settings')]
 
-    logger.info('[Upload] Sending "%s" to %s.', name, format_targets(targets))
+    logger.info(f'[Upload] Sending "{name}" to {format_targets(targets)}.')
     results: list[tuple[str, bool, Optional[str]]] = []
     for target in targets:
         try:
@@ -79,10 +78,8 @@ def upload_recipe_to_targets(recipe_data: dict,
                     mealie.upload_image(recipe_slug, image_path)
                 results.append((target, True, None))
         except Exception as upload_error:
-            logger.error(
-                '[Upload] %s did not accept "%s": %s',
-                TARGET_LABELS.get(target, target), name, upload_error,
-            )
+            label = TARGET_LABELS.get(target, target)
+            logger.error(f'[Upload] {label} did not accept "{name}": {upload_error}')
             results.append((target, False, str(upload_error)))
 
     final_target = format_targets(targets)
@@ -92,5 +89,5 @@ def upload_recipe_to_targets(recipe_data: dict,
         final_target = format_targets(succeeded)
 
     if not failed:
-        logger.info('[Upload] "%s" is now in %s.', name, final_target)
+        logger.info(f'[Upload] "{name}" is now in {final_target}.')
     return final_target, [(t, msg) for t, ok, msg in failed]

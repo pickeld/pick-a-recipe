@@ -542,7 +542,7 @@ class JobManager:
                 )
                 conn.commit()
 
-        logger.error('[Job] %s failed: %s', job_id, error_message)
+        logger.error(f'[Job] {job_id} failed: {error_message}')
         payload = {'job_id': job_id, 'error': error_message}
         self._emit_to_rooms('job_failed', payload, job_id)
 
@@ -604,22 +604,19 @@ class JobManager:
             from database import delete_pending_upload
             delete_pending_upload(upload_id)
             logger.info(
-                '[Approval] "%s" was not held for approval because the job had already moved on.',
-                recipe_name,
+                f'[Approval] "{recipe_name}" was not held for approval because the job had already moved on.'
             )
             return None
 
         if output_target and output_target != 'no target':
             logger.info(
-                '[Approval] "%s" is ready. Nothing has been sent to %s yet. '
-                'Approve it on the Tasks page. Refreshing the page opens the preview again.',
-                recipe_name, output_target,
+                f'[Approval] "{recipe_name}" is ready. Nothing has been sent to {output_target} yet. '
+                'Approve it on the Tasks page. Refreshing the page opens the preview again.'
             )
         else:
             logger.info(
-                '[Approval] "%s" is ready. No recipe manager is enabled, so '
-                'approving it will not send it anywhere. Enable Mealie or Tandoor in Settings.',
-                recipe_name,
+                f'[Approval] "{recipe_name}" is ready. No recipe manager is enabled, so '
+                'approving it will not send it anywhere. Enable Mealie or Tandoor in Settings.'
             )
         notify_user(
             user_id,
@@ -658,10 +655,7 @@ class JobManager:
         job_id = upload['job_id']
         recipe_name = _recipe_label(upload.get('recipe_data'), get_job(job_id))
         target = upload.get('output_target') or 'the recipe manager'
-        logger.info(
-            '[Approval] "%s" approved. Sending it to %s now.',
-            recipe_name, target,
-        )
+        logger.info(f'[Approval] "{recipe_name}" approved. Sending it to {target} now.')
         self.enqueue_upload_resume(job_id)
         self.socketio.emit(
             'approval_confirmed',
@@ -684,10 +678,7 @@ class JobManager:
 
         job_id = upload['job_id']
         recipe_name = _recipe_label(upload.get('recipe_data'), get_job(job_id))
-        logger.info(
-            '[Approval] "%s" was cancelled. Nothing was sent.',
-            recipe_name,
-        )
+        logger.info(f'[Approval] "{recipe_name}" was cancelled. Nothing was sent.')
         with self._lock:
             if job_id in self.cancellation_flags:
                 self.cancellation_flags[job_id].set()
@@ -787,14 +778,14 @@ class JobManager:
                 try:
                     self.transition(job_id, EXPIRED,
                                     reason='Approval is no longer open')
+                    label = job.get('video_title') or job_id
                     logger.info(
-                        '[Approval] "%s" closed before it was approved, so nothing was sent.',
-                        job.get('video_title') or job_id,
+                        f'[Approval] "{label}" closed before it was approved, so nothing was sent.'
                     )
                 except InvalidTransition:
+                    label = job.get('video_title') or job_id
                     logger.info(
-                        '[Approval] "%s" was due to close, but it had already moved on.',
-                        job.get('video_title') or job_id,
+                        f'[Approval] "{label}" was due to close, but it had already moved on.'
                     )
         if result.get('requeued'):
             self._broadcast_queue_positions()
