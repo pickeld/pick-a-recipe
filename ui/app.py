@@ -25,7 +25,7 @@ import mobile_auth
 import passwords
 import login_throttle
 import push
-from helpers import setup_logger
+from helpers import apply_log_level, setup_logger
 from database import (
     init_db, load_config, save_config,
     get_user, upsert_oidc_user,
@@ -208,6 +208,8 @@ AUTH_MODE = (os.environ.get('AUTH_MODE') or 'local').strip().lower()
 # records you go looking for after something unexpected, and stdout buffering
 # means a print can still be sitting unflushed when the process is killed.
 auth_log = setup_logger('auth')
+# LOG_LEVEL from the environment. info unless the operator set debug or warning.
+apply_log_level()
 
 if AUTH_MODE == 'none':
     # Accepted rather than rejected so existing deployments still boot. They

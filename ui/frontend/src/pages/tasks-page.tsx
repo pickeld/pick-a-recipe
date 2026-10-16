@@ -696,6 +696,12 @@ function TaskRowItem({
         {(row.status === 'failed' || row.status === 'expired') && row.error && (
           <p className="text-xs text-destructive whitespace-pre-wrap break-words">{row.error}</p>
         )}
+        {(row.status === 'failed' || row.status === 'expired') && (
+          <p className="text-xs text-muted-foreground">
+            To report this, set <span className="font-mono">LOG_LEVEL=debug</span>, restart,
+            repeat it, and paste the container log into a bug report.
+          </p>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>

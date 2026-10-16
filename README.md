@@ -53,6 +53,7 @@ docker run -d \
   --name pick-a-recipe \
   -p 5006:5006 \
   -e FLASK_SECRET_KEY="your-secure-secret-key" \
+  -e LOG_LEVEL=info \
   -v pick-a-recipe-data:/app/data \
   pickeld/pick-a-recipe:latest
 ```
@@ -80,6 +81,8 @@ services:
       - "5006:5006"
     environment:
       - FLASK_SECRET_KEY=your-secure-secret-key
+      # info by default. debug when a bug report needs every step; restart after changing it.
+      - LOG_LEVEL=info
     volumes:
       - pick-a-recipe-data:/app/data
 

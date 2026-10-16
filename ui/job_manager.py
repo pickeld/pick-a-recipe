@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Callable, TYPE_CHECKING
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import config
+from helpers import setup_logger
 from database import (
     create_job as db_create_job,
     get_job,
@@ -54,6 +55,8 @@ from database import (
     find_stranded_approvals,
 )
 from push import notify_user
+
+logger = setup_logger('jobs')
 
 if TYPE_CHECKING:
     from flask_socketio import SocketIO
@@ -239,6 +242,13 @@ class JobManager:
                 'reason': reason,
             }
             self._emit_to_rooms(f'job_{new_state}', payload, job_id)
+            logger.info(
+                'job %s %s -> %s%s',
+                job_id,
+                old_state,
+                new_state,
+                f' ({reason})' if reason else '',
+            )
         return claimed
 
     # ===== worker pool =====
@@ -588,8 +598,16 @@ class JobManager:
             # the orphaned request rather than fighting the state machine.
             from database import delete_pending_upload
             delete_pending_upload(upload_id)
+            logger.info(
+                'job %s left awaiting_approval before the preview could open',
+                job_id,
+            )
             return None
 
+        logger.info(
+            'job %s waiting for approval upload=%s target=%s',
+            job_id, upload_id, output_target,
+        )
         recipe_name = recipe_data.get('name') or (job or {}).get('video_title') or 'A recipe'
         notify_user(
             user_id,
@@ -606,6 +624,7 @@ class JobManager:
         """Approve a pending upload and schedule its upload phase."""
         upload = get_pending_upload(upload_id)
         if not upload or upload['status'] != 'pending':
+            logger.info('approval %s could not be confirmed', upload_id)
             return {'ok': False, 'error': 'not found or already processed'}
 
         if recipe is not None:
@@ -623,6 +642,7 @@ class JobManager:
             return {'ok': False, 'error': 'already processed'}
 
         job_id = upload['job_id']
+        logger.info('job %s approval %s confirmed', job_id, upload_id)
         self.enqueue_upload_resume(job_id)
         self.socketio.emit(
             'approval_confirmed',
@@ -636,11 +656,13 @@ class JobManager:
         """Reject a pending upload; its job becomes cancelled."""
         upload = get_pending_upload(upload_id)
         if not upload or upload['status'] != 'pending':
+            logger.info('approval %s could not be rejected', upload_id)
             return {'ok': False, 'error': 'not found or already processed'}
         if not cancel_pending_upload(upload_id):
             return {'ok': False, 'error': 'already processed'}
 
         job_id = upload['job_id']
+        logger.info('job %s approval %s rejected', job_id, upload_id)
         with self._lock:
             if job_id in self.cancellation_flags:
                 self.cancellation_flags[job_id].set()
@@ -740,7 +762,10 @@ class JobManager:
                     self.transition(job_id, EXPIRED,
                                     reason='Approval is no longer open')
                 except InvalidTransition:
-                    pass
+                    logger.info(
+                        'job %s was due to expire but had already moved on',
+                        job_id,
+                    )
         if result.get('requeued'):
             self._broadcast_queue_positions()
         return {**result, 'expired': len(expired_job_ids)}
