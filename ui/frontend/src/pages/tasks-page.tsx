@@ -543,8 +543,8 @@ function ApprovalReviewDialog({
 
   return (
     <Dialog open={uploadId !== null} onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100svh-1rem)] flex-col gap-4 overflow-y-auto overscroll-contain sm:max-w-2xl">
+        <DialogHeader className="shrink-0 pr-8">
           <DialogTitle>Review recipe</DialogTitle>
           <DialogDescription>
             Edit the recipe, then confirm to upload
@@ -569,7 +569,7 @@ function ApprovalReviewDialog({
             <RecipeEditForm recipe={recipe} onChange={setRecipe} />
           </div>
         )}
-        <DialogFooter>
+        <DialogFooter className="sticky bottom-0 z-10 mb-0 shrink-0 bg-muted">
           <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancel
           </Button>

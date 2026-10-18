@@ -128,8 +128,8 @@ export function RecipePreviewHost() {
         if (!open) setPreview(null)
       }}
     >
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100svh-1rem)] flex-col gap-4 overflow-y-auto overscroll-contain sm:max-w-2xl">
+        <DialogHeader className="shrink-0 pr-8">
           <DialogTitle>Recipe Preview</DialogTitle>
           {preview && (
             <DialogDescription>
@@ -163,7 +163,7 @@ export function RecipePreviewHost() {
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="sticky bottom-0 z-10 mb-0 shrink-0 bg-muted">
           <Button
             variant="outline"
             onClick={() => {

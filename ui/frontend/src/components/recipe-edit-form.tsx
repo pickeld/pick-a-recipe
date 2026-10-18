@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import type {
   HowToStep,
@@ -126,8 +125,7 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
   }
 
   return (
-    <ScrollArea className="max-h-[60vh]">
-      <div className="space-y-4 pr-2">
+    <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="recipe-name">Name</Label>
           <Input
@@ -332,7 +330,6 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
             </div>
           </>
         )}
-      </div>
-    </ScrollArea>
+    </div>
   )
 }
