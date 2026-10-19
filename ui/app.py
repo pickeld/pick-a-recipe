@@ -2689,6 +2689,24 @@ def process_video_job(job_id, jm):
     )
 
 
+def _socket_job_id(data):
+    """Read a job id from a socket payload.
+
+    The current UI sends the id as a string. Older pages send
+    ``{"job_id": "<id>"}``. Both are accepted. Anything else is ignored
+    so a mismatched payload cannot crash the handler.
+    """
+    if isinstance(data, str):
+        job_id = data.strip()
+        return job_id or None
+    if isinstance(data, dict):
+        job_id = data.get('job_id')
+        if isinstance(job_id, str):
+            job_id = job_id.strip()
+        return job_id or None
+    return None
+
+
 # ===== WebSocket Handlers =====
 
 @socketio.on('connect')
@@ -2703,7 +2721,7 @@ def handle_connect():
 def handle_subscribe_job(data):
     if not _socketio_authenticated():
         return False
-    job_id = data.get('job_id')
+    job_id = _socket_job_id(data)
     if job_id:
         user_id, is_admin = _scope()
         job = get_job(job_id, user_id=user_id, is_admin=is_admin)
@@ -2718,7 +2736,7 @@ def handle_subscribe_job(data):
 def handle_unsubscribe_job(data):
     if not _socketio_authenticated():
         return False
-    job_id = data.get('job_id')
+    job_id = _socket_job_id(data)
     if job_id:
         leave_room(f'job_{job_id}')
         emit('unsubscribed', {'job_id': job_id, 'status': 'unsubscribed'})
