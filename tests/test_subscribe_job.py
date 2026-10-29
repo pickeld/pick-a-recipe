@@ -63,3 +63,30 @@ class SubscribeJobPayloadTests(unittest.TestCase):
         self.assertEqual(out['unsubscribed'], ['unsubscribed'], out)
         self.assertEqual(out['as_object'], ['subscribed'], out)
         self.assertEqual(out['ignored'], [], out)
+
+    def test_upload_handlers_ignore_non_object_payloads(self):
+        script = textwrap.dedent("""
+            from app import app, socketio
+            from database import create_local_user
+
+            create_local_user('tester', 'hash', is_admin=True)
+
+            client = app.test_client()
+            with client.session_transaction() as session:
+                session['user'] = 'tester'
+                session['is_admin'] = True
+            sio = socketio.test_client(app, flask_test_client=client)
+            sio.get_received()
+
+            for event in ('confirm_upload', 'cancel_upload'):
+                sio.emit(event, 'some-upload-id')
+                sio.emit(event, 12)
+
+            emit(
+                connected=sio.is_connected(),
+                received=[event['name'] for event in sio.get_received()],
+            )
+        """)
+        out = _result(_run(script))
+        self.assertTrue(out['connected'], out)
+        self.assertEqual(out['received'], [], out)

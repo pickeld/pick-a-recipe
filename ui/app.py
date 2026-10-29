@@ -2746,6 +2746,8 @@ def handle_unsubscribe_job(data):
 def handle_confirm_upload(data):
     if not _socketio_authenticated():
         return False
+    if not isinstance(data, dict):
+        return
     upload_id = data.get('upload_id')
     selected_image_index = data.get('selected_image_index')
     if not upload_id:
@@ -2766,6 +2768,8 @@ def handle_confirm_upload(data):
 def handle_cancel_upload(data):
     if not _socketio_authenticated():
         return False
+    if not isinstance(data, dict):
+        return
     upload_id = data.get('upload_id')
     if not upload_id:
         return
