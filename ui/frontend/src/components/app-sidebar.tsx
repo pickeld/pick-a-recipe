@@ -1,24 +1,42 @@
 import { useQuery } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
-import { ChefHat, Home, ListChecks, LogOut, Moon, Settings, Sun } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import {
+  BookOpen, CalendarDays, ChefHat, Download, History, Home, Languages, ListChecks, LogOut, Moon, Package, Settings,
+  ShoppingCart, Sparkles, Sun,
+} from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { kitchen } from '@/lib/kitchen'
 import { useSession } from '@/hooks/use-session'
 import { useSocketEvent } from '@/lib/socket'
+import { LANGUAGES, useDirection } from '@/i18n'
 import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarRail } from '@/components/ui/sidebar'
 import { Separator } from '@/components/ui/separator'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
+const KITCHEN_ITEMS = [
+  { key: 'library', to: '/library', icon: BookOpen },
+  { key: 'souschef', to: '/souschef', icon: Sparkles },
+  { key: 'planner', to: '/planner', icon: CalendarDays },
+  { key: 'shopping', to: '/shopping', icon: ShoppingCart },
+  { key: 'pantry', to: '/pantry', icon: Package },
+  { key: 'import', to: '/import', icon: Download },
+  { key: 'cookLog', to: '/cook-log', icon: History },
+] as const
+
 const NAV_ITEMS = [
-  { title: 'Home', to: '/', icon: Home },
-  { title: 'Tasks', to: '/tasks', icon: ListChecks },
-  { title: 'Settings', to: '/settings', icon: Settings },
+  { key: 'extract', to: '/', icon: Home },
+  { key: 'tasks', to: '/tasks', icon: ListChecks },
+  { key: 'settings', to: '/settings', icon: Settings },
 ] as const
 
 export function AppSidebar() {
   const queryClient = useQueryClient()
+  const { t, i18n } = useTranslation()
+  const dir = useDirection()
   const { data: session } = useSession()
   const { theme, toggleTheme } = useTheme()
 
@@ -33,47 +51,56 @@ export function AppSidebar() {
   })
   const approvalsCount = pending?.pending_uploads.length ?? 0
 
+  const { data: lists } = useQuery({ queryKey: ['kitchen', 'shopping', 'lists'], queryFn: kitchen.shoppingLists })
+  const shoppingCount = lists?.lists.reduce((n, l) => n + (l.open_items ?? 0), 0) ?? 0
+
+  const badges: Record<string, number> = { tasks: approvalsCount, shopping: shoppingCount }
+  const nextLanguage = LANGUAGES.find((l) => l.code !== i18n.language) ?? LANGUAGES[0]
+
+  const renderItems = (items: readonly { key: string; to: string; icon: typeof Home }[]) => (
+    <SidebarMenu>
+      {items.map((item) => (
+        <SidebarMenuItem key={item.to}>
+          <NavLink to={item.to} end={item.to === '/'}>
+            {({ isActive }) => (
+              <SidebarMenuButton isActive={isActive} tooltip={t(`nav.${item.key}`)}>
+                <item.icon />
+                <span>{t(`nav.${item.key}`)}</span>
+              </SidebarMenuButton>
+            )}
+          </NavLink>
+          {badges[item.key] > 0 && (
+            <SidebarMenuBadge className={item.key === 'tasks' ? 'bg-destructive text-white rounded-full px-1.5' : 'rounded-full bg-muted px-1.5'}>
+              {badges[item.key]}
+            </SidebarMenuBadge>
+          )}
+        </SidebarMenuItem>
+      ))}
+    </SidebarMenu>
+  )
+
   return (
     <TooltipProvider>
-      <Sidebar collapsible="offcanvas">
+      <Sidebar collapsible="offcanvas" side={dir === 'rtl' ? 'right' : 'left'} className="no-print">
         <SidebarHeader>
           <div className="flex items-center gap-2 px-2 py-1.5">
             <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <ChefHat className="size-4" />
             </div>
             <span className="text-sm font-semibold tracking-tight">
-              Pick a Recipe
+              {t('nav.app')}
             </span>
           </div>
         </SidebarHeader>
 
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>Navigation</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {NAV_ITEMS.map((item) => (
-                  <SidebarMenuItem key={item.to}>
-                    <NavLink to={item.to}>
-                      {({ isActive }) => (
-                        <SidebarMenuButton
-                          isActive={isActive}
-                          tooltip={item.title}
-                        >
-                          <item.icon />
-                          <span>{item.title}</span>
-                        </SidebarMenuButton>
-                      )}
-                    </NavLink>
-                    {item.title === 'Tasks' && approvalsCount > 0 && (
-                      <SidebarMenuBadge className="bg-destructive text-white rounded-full px-1.5">
-                        {approvalsCount}
-                      </SidebarMenuBadge>
-                    )}
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
+            <SidebarGroupLabel>{t('nav.kitchen')}</SidebarGroupLabel>
+            <SidebarGroupContent>{renderItems(KITCHEN_ITEMS)}</SidebarGroupContent>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel>{t('nav.extraction')}</SidebarGroupLabel>
+            <SidebarGroupContent>{renderItems(NAV_ITEMS)}</SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
 
@@ -83,7 +110,7 @@ export function AppSidebar() {
               variant="ghost"
               size="icon"
               onClick={toggleTheme}
-              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              aria-label={theme === 'dark' ? t('nav.lightMode') : t('nav.darkMode')}
             >
               {theme === 'dark' ? (
                 <Sun className="size-4" />
@@ -91,10 +118,20 @@ export function AppSidebar() {
                 <Moon className="size-4" />
               )}
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void i18n.changeLanguage(nextLanguage.code)}
+              aria-label={t('nav.language')}
+              lang={nextLanguage.code}
+            >
+              <Languages className="size-4" />
+              {nextLanguage.label}
+            </Button>
             <Separator orientation="vertical" className="h-5" />
-            <a href="/logout" aria-label="Log out">
-              <Button variant="ghost" size="icon" title="Logout">
-                <LogOut className="size-4" />
+            <a href="/logout" aria-label={t('nav.logout')}>
+              <Button variant="ghost" size="icon" title={t('nav.logout')}>
+                <LogOut className="size-4 rtl:-scale-x-100" />
               </Button>
             </a>
           </div>
@@ -103,7 +140,7 @@ export function AppSidebar() {
               <span className="truncate">{session.user}</span>
               {session.is_admin && (
                 <span className="shrink-0 rounded-sm bg-primary/10 px-1 py-0.5 font-medium text-primary">
-                  admin
+                  {t('nav.admin')}
                 </span>
               )}
             </div>

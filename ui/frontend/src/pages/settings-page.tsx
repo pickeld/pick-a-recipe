@@ -246,6 +246,7 @@ export function SettingsPage() {
   const extractionProvider =
     get('ai_extraction_provider') || get('llm_provider') || providerRows[0]?.id || ''
   const transcriptionMode = get('transcription_mode') || 'local'
+  const libraryEnabled = get('library_enabled') !== 'false'
   const mealieEnabled = get('mealie_enabled') === 'true'
   const tandoorEnabled = get('tandoor_enabled') === 'true'
   const confirmBeforeUpload = get('confirm_before_upload') === 'true'
@@ -399,10 +400,23 @@ export function SettingsPage() {
             Recipe Export
           </CardTitle>
           <CardDescription>
-            Where finished recipes get uploaded. Enable both to send every recipe to both managers.
+            Where finished recipes get saved. Each enabled destination receives every recipe.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">The Chef library (built in)</p>
+              <p className="text-xs text-muted-foreground">
+                Save every extracted recipe to this app&apos;s own library, planner and shopping list.
+              </p>
+            </div>
+            <Switch
+              checked={libraryEnabled}
+              onCheckedChange={checked => set('library_enabled', checked ? 'true' : 'false')}
+              aria-label="Enable the built-in library"
+            />
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Mealie */}
             <Card className={mealieEnabled ? '' : 'opacity-60'}>
@@ -483,9 +497,9 @@ export function SettingsPage() {
             </Card>
           </div>
 
-          {!mealieEnabled && !tandoorEnabled && (
+          {!libraryEnabled && !mealieEnabled && !tandoorEnabled && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
-              <strong>No recipe manager is enabled.</strong> Recipes will not be uploaded anywhere until you enable Mealie or Tandoor.
+              <strong>No recipe destination is enabled.</strong> Recipes will not be saved anywhere until you enable the library, Mealie or Tandoor.
             </div>
           )}
 
