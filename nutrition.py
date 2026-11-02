@@ -490,47 +490,92 @@ def ingredient_grams(item: dict) -> float | None:
     )
 
 
-def lookup_recipe_nutrition(recipe: dict) -> dict | None:
-    """Return Schema.org NutritionInformation per serving, or None if too little matched."""
+NUTRIENT_KEYS = (
+    "calories", "proteinContent", "fatContent", "carbohydrateContent",
+    "fiberContent", "sugarContent", "sodiumContent", "cholesterolContent",
+)
+
+
+def estimate_recipe_nutrition(recipe: dict, servings: float | None = None) -> dict | None:
+    """Whole-recipe nutrient totals plus how much of the recipe they cover.
+
+    Returns ``{"total", "per_serving", "matched", "usable", "servings",
+    "ingredients"}`` with plain numbers (kcal, g, mg), or None when nothing
+    could be weighed. ``ingredients`` lists, per input position, the grams and
+    kcal that went into the total so a UI can show what was left out.
+    """
     ingredients = recipe.get("recipeIngredients") or []
     if not ingredients:
         return None
     total = _zero()
     matched = 0
-    weighed = 0
-    for item in ingredients:
+    weighed = 0.0
+    usable = 0
+    breakdown: list[dict[str, Any]] = []
+    for index, item in enumerate(ingredients):
         if not isinstance(item, dict):
             continue
         food = str(item.get("food") or "").strip()
         if not food:
             continue
+        usable += 1
         resolved = _nutrients_for(food)
         grams = ingredient_grams(item)
         if grams is None or grams <= 0 or resolved is None:
+            breakdown.append({"index": index, "food": food, "matched": False})
             continue
         _canon, meta = resolved
-        total = _add(total, _scale(meta["n"], grams))
+        contribution = _scale(meta["n"], grams)
+        total = _add(total, contribution)
         matched += 1
         weighed += grams
+        breakdown.append({
+            "index": index, "food": food, "matched": True,
+            "grams": round(grams, 1), "kcal": round(contribution[0]),
+        })
 
-    usable = sum(1 for i in ingredients if isinstance(i, dict) and str(i.get("food") or "").strip())
     if matched == 0 or weighed <= 0:
         return None
 
-    servings = max(extract_servings(recipe), 1)
-    kcal, protein, fat, carb, fiber, sugar, sodium, chol = (v / servings for v in total)
-    raw = {
-        "calories": f"{round(kcal)} kcal",
-        "proteinContent": f"{round(protein, 1)} g",
-        "fatContent": f"{round(fat, 1)} g",
-        "carbohydrateContent": f"{round(carb, 1)} g",
-        "fiberContent": f"{round(fiber, 1)} g",
-        "sugarContent": f"{round(sugar, 1)} g",
-        "sodiumContent": f"{round(sodium)} mg",
-        "cholesterolContent": f"{round(chol)} mg",
+    count = servings if servings and servings > 0 else max(extract_servings(recipe), 1)
+    totals = dict(zip(NUTRIENT_KEYS, total))
+    per_serving = {k: v / count for k, v in totals.items()}
+    return {
+        "total": {k: round(v, 1) for k, v in totals.items()},
+        "per_serving": {k: round(v, 1) for k, v in per_serving.items()},
+        "matched": matched,
+        "usable": usable,
+        "servings": count,
+        "ingredients": breakdown,
+        "_per_serving_exact": per_serving,
     }
-    cleaned = sanitize_nutrition_fields(raw)
+
+
+def schema_nutrition(values: dict) -> dict:
+    """Plain per-serving numbers as Schema.org NutritionInformation strings."""
+    raw = {
+        "calories": f"{round(values.get('calories', 0))} kcal",
+        "proteinContent": f"{round(values.get('proteinContent', 0), 1)} g",
+        "fatContent": f"{round(values.get('fatContent', 0), 1)} g",
+        "carbohydrateContent": f"{round(values.get('carbohydrateContent', 0), 1)} g",
+        "fiberContent": f"{round(values.get('fiberContent', 0), 1)} g",
+        "sugarContent": f"{round(values.get('sugarContent', 0), 1)} g",
+        "sodiumContent": f"{round(values.get('sodiumContent', 0))} mg",
+        "cholesterolContent": f"{round(values.get('cholesterolContent', 0))} mg",
+    }
+    return sanitize_nutrition_fields(raw)
+
+
+def lookup_recipe_nutrition(recipe: dict) -> dict | None:
+    """Return Schema.org NutritionInformation per serving, or None if too little matched."""
+    estimate = estimate_recipe_nutrition(recipe)
+    if estimate is None:
+        return None
+    cleaned = schema_nutrition(estimate["_per_serving_exact"])
     if not any(k != "@type" for k in cleaned):
         return None
-    logger.info("[Nutrition] estimated from %d/%d ingredients, %d servings", matched, usable, servings)
+    logger.info(
+        "[Nutrition] estimated from %d/%d ingredients, %d servings",
+        estimate["matched"], estimate["usable"], estimate["servings"],
+    )
     return cleaned
