@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { BookOpen, Download, FolderHeart, Heart, History, Import, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { BookOpen, Download, Flame, FolderHeart, Heart, History, Import, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { kitchen, type ListParams, type RecipeSummary } from '@/lib/kitchen'
@@ -35,30 +35,39 @@ function useDebounced<T>(value: T, ms = 250): T {
 export function RecipeCard({ recipe }: { recipe: RecipeSummary }) {
   const { t } = useTranslation()
   return (
-    <Link to={`/library/${recipe.id}`} className="group block focus-visible:outline-none">
-      <Card className="h-full gap-0 overflow-hidden p-0 transition-shadow group-hover:shadow-md group-focus-visible:ring-2 group-focus-visible:ring-ring">
-        <div className="relative aspect-[4/3]">
-          <RecipeImage src={recipe.image_url} alt="" className="size-full" />
-          {recipe.favorite && (
-            <Heart className="absolute top-2 end-2 size-5 fill-rose-500 text-rose-500 drop-shadow" aria-label={t('library.favorite')} />
-          )}
-        </div>
-        <div className="flex flex-1 flex-col gap-1.5 p-3">
-          <h3 className="line-clamp-2 font-medium leading-snug" dir="auto">{recipe.name}</h3>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            <Minutes value={recipe.total_minutes} />
-            {recipe.calories ? <span className="text-muted-foreground">{t('library.kcal', { value: Math.round(recipe.calories) })}</span> : null}
-            {recipe.rating ? <Rating value={recipe.rating} size="sm" /> : null}
+    <Link to={`/library/${recipe.id}`} className="group flex h-full flex-col gap-2.5 rounded-2xl focus-visible:outline-none">
+      <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-muted shadow-sm ring-1 ring-black/5 transition-shadow group-hover:shadow-lg group-focus-visible:ring-2 group-focus-visible:ring-ring dark:ring-white/10">
+        <RecipeImage
+          src={recipe.image_url}
+          alt=""
+          seed={recipe.name}
+          className="size-full transition-transform duration-300 ease-out group-hover:scale-105 motion-reduce:transition-none motion-reduce:group-hover:scale-100"
+        />
+        {recipe.favorite && (
+          <span className="absolute top-2 end-2 grid size-8 place-items-center rounded-full bg-background/90 shadow-sm backdrop-blur">
+            <Heart className="size-4 fill-rose-500 text-rose-500" aria-label={t('library.favorite')} />
+          </span>
+        )}
+        {(recipe.total_minutes || recipe.calories) ? (
+          <div className="absolute bottom-2 start-2 flex flex-wrap gap-1.5 text-xs font-medium">
+            {recipe.total_minutes ? <Minutes value={recipe.total_minutes} className="rounded-full bg-background/90 px-2 py-0.5 text-foreground shadow-sm backdrop-blur" /> : null}
+            {recipe.calories ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-background/90 px-2 py-0.5 shadow-sm backdrop-blur">
+                <Flame className="size-3.5 text-orange-500" />{t('library.kcal', { value: Math.round(recipe.calories) })}
+              </span>
+            ) : null}
           </div>
-          {recipe.tags.length > 0 && (
-            <div className="mt-auto flex flex-wrap gap-1 pt-1">
-              {recipe.tags.slice(0, 3).map((tag) => (
-                <Badge key={tag} variant="outline" className="text-[11px] font-normal">{tag}</Badge>
-              ))}
-            </div>
-          )}
-        </div>
-      </Card>
+        ) : null}
+      </div>
+      <div className="flex flex-1 flex-col gap-1 px-0.5">
+        <h3 className="line-clamp-2 font-semibold leading-snug" dir="auto">{recipe.name}</h3>
+        {(recipe.rating || recipe.tags.length > 0) && (
+          <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+            {recipe.rating ? <Rating value={recipe.rating} size="sm" /> : null}
+            {recipe.tags.length > 0 && <span className="truncate" dir="auto">{recipe.tags.slice(0, 3).join(' · ')}</span>}
+          </div>
+        )}
+      </div>
     </Link>
   )
 }
@@ -245,12 +254,17 @@ export function LibraryPage() {
       {error ? (
         <p className="text-destructive">{errorText(error)}</p>
       ) : isLoading ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-          {Array.from({ length: 10 }, (_, i) => <Skeleton key={i} className="aspect-[3/4] rounded-xl" />)}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {Array.from({ length: 10 }, (_, i) => (
+            <div key={i} className="grid gap-2.5">
+              <Skeleton className="aspect-[4/3] rounded-2xl" />
+              <Skeleton className="h-4 w-3/4" />
+            </div>
+          ))}
         </div>
       ) : data && data.items.length ? (
         <>
-          <div className={cn('grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5', isFetching && 'opacity-70')}>
+          <div className={cn('grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5', isFetching && 'opacity-70')}>
             {data.items.map((r) => <RecipeCard key={r.id} recipe={r} />)}
           </div>
           {data.total > data.items.length && (
