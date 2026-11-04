@@ -79,6 +79,7 @@ def suggest():
         max_minutes=_int_or_none(data.get("max_minutes"), 5, 1440),
         diets=_diets(data.get("diets")),
         tags=_strings(data.get("tags"), 10),
+        lang=str(data.get("lang") or "")[:10] or None,
     )
     if not use_ai:
         return jsonify(souschef.suggest(username=current_user(), use_ai=False, **kwargs))
@@ -125,10 +126,13 @@ def substitute():
 def use_it_up():
     data = body()
     days = _int_or_none(data.get("days"), 0, 30)
+    lang = str(data.get("lang") or "")[:10] or None
     if data.get("ai") is False:
-        return jsonify(souschef.use_it_up(username=current_user(), days=3 if days is None else days, use_ai=False))
+        return jsonify(souschef.use_it_up(
+            username=current_user(), days=3 if days is None else days, use_ai=False, lang=lang,
+        ))
     with _one_at_a_time() as user:
-        return jsonify(souschef.use_it_up(username=user, days=3 if days is None else days))
+        return jsonify(souschef.use_it_up(username=user, days=3 if days is None else days, lang=lang))
 
 
 @bp.post("/souschef/plan-week")

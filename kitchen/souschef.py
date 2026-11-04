@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from datetime import date, timedelta
 from typing import Any, Literal
 
@@ -208,6 +209,40 @@ def _violates_diet(foods: list[str], diets: list[str]) -> bool:
     return False
 
 
+_MESSAGE_STOPWORDS = frozenset((
+    "a", "an", "and", "any", "anything", "are", "can", "dinner", "do", "for", "have", "i", "idea",
+    "ideas", "in", "is", "it", "lunch", "me", "meal", "my", "of", "or", "please", "quick", "recipe",
+    "recipes", "some", "something", "the", "to", "today", "tonight", "use", "want", "what", "with",
+    "without", "you", "breakfast", "easy", "make", "cook", "fast", "up", "items", "that", "expire",
+    "soon",
+    "או", "אוכל", "אז", "אני", "ארוחה", "ארוחת", "את", "בא", "בוקר", "בלי", "בקלות", "גם", "היום",
+    "זה", "יש", "כל", "לבשל", "להכין", "לי", "לנו", "מה", "מהיר", "מהירה", "מתכון", "מתכונים",
+    "משהו", "עם", "ערב", "צהריים", "קל", "קלה", "רוצה", "רעיון", "של", "שיש",
+))
+
+
+def message_terms(message: str) -> list[str]:
+    """Words worth searching the library for: foods and dish names, not filler."""
+    terms: list[str] = []
+    for word in re.findall(r"[^\W\d_]+(?:['׳][^\W\d_]+)?", message.casefold()):
+        if len(word) < 2 or word in _MESSAGE_STOPWORDS:
+            continue
+        if any("\u0590" <= ch <= "\u05FF" for ch in word) and len(word) > 3 and word[0] in "הובלמש":
+            if word[1:] in _MESSAGE_STOPWORDS:
+                continue
+            # Keep the bare form too, so "ואספרגוס" finds "אספרגוס".
+            terms.append(word[1:])
+        terms.append(word)
+    return list(dict.fromkeys(terms))[:12]
+
+
+def _term_in(term: str, text: str) -> bool:
+    tokens = text.split()
+    if any("\u0590" <= ch <= "\u05FF" for ch in term):
+        return _keyword_in(term, text)
+    return any(tok == term or (tok.startswith(term) and len(term) > 3) for tok in tokens)
+
+
 def _library(conn) -> list[dict]:
     rows = conn.execute(
         "SELECT r.id, r.name, r.total_minutes, r.cuisine, r.category,"
@@ -234,11 +269,17 @@ def score_recipes(
     diets: list[str] | None = None,
     tags: list[str] | None = None,
     must_use: list[str] | None = None,
+    mentions: list[str] | None = None,
     limit: int = CANDIDATES,
     seed: int | None = None,
 ) -> list[dict]:
-    """Rank the library for what the user has. Pure code, no AI."""
+    """Rank the library for what the user has. Pure code, no AI.
+
+    ``mentions`` are words from the user's message. A recipe whose name, ingredients or tags
+    contain one ranks well above the rest, so the AI gets to see it.
+    """
     have_keys = [food_key(h) for h in have if food_key(h)]
+    mention_terms = [m.casefold() for m in (mentions or []) if m.strip()]
     must_keys = [food_key(m) for m in (must_use or []) if food_key(m)]
     today = date.today()
     rng = random.Random(seed)
@@ -273,10 +314,14 @@ def score_recipes(
             continue
         matched = [f for f in relevant if has_food(have_keys, f)] if have_keys else []
         missing = [f for f in relevant if f not in matched] if have_keys else []
-        if have_keys and not matched:
+        text = " ".join([recipe["name"], *foods, *recipe["tags"]]).casefold()
+        mentioned = [m for m in mention_terms if _term_in(m, text)]
+        if have_keys and not matched and not mentioned:
             continue
         coverage = (len(matched) / len(relevant)) if relevant else 0.0
         score = coverage * 100 - 6 * len(missing) if have_keys else 0.0
+        if mentioned:
+            score += 60 + 10 * len(mentioned)
         m = meta.get(recipe["id"])
         if m is not None:
             if m["favorite"]:
@@ -299,6 +344,7 @@ def score_recipes(
             "coverage": round(coverage, 2),
             "have": matched,
             "missing": missing,
+            "mentioned": mentioned,
             "score": round(score, 1),
             "favorite": bool(m["favorite"]) if m is not None else False,
             "last_cooked": last,
@@ -315,6 +361,8 @@ You help the user decide what to cook from THEIR OWN saved recipes.
 You receive:
 - "candidates": recipes from the user's library, already ranked by code. Each has an id,
   name, minutes, tags, the ingredients the user has ("have") and the ones they lack ("missing").
+  "mentioned" lists words from the user's message found in that recipe's name, ingredients or
+  tags; a recipe with a non-empty "mentioned" is usually what the user is asking about.
 - "on_hand": what the user says they have. "constraints": time, diet, mood or cuisine.
 - "history": the conversation so far, and "message": what the user just said.
 
@@ -326,8 +374,17 @@ Rules:
   ingredient where a common swap exists; leave the list empty otherwise.
 - "reply" is a short conversational answer (1-3 sentences). If nothing fits, say so and
   suggest what to buy or that Sous Chef can invent a new recipe.
+- Do not assume the user's gender. In Hebrew, address them in the plural ("תרצו", "יש לכם")
+  and speak of yourself without gendered verbs where you can ("לא נמצא", not "לא מצאתי").
 - Write "reply", "why" and substitutions in {language}.
 """
+
+_UI_LANGUAGES = {"he": "Hebrew", "en": "English"}
+
+
+def reply_language(lang: str | None) -> str:
+    """The language for chat replies: the UI language when known, else the recipe language."""
+    return _UI_LANGUAGES.get((lang or "").split("-")[0].lower()) or _language()
 
 
 def suggest(
@@ -342,12 +399,14 @@ def suggest(
     tags: list[str] | None = None,
     must_use: list[str] | None = None,
     use_ai: bool = True,
+    lang: str | None = None,
 ) -> dict:
     have = [h for h in on_hand if str(h).strip()][:60]
     if use_pantry:
         have += [i["food"] for i in pantry.list_items()]
     candidates = score_recipes(
         have, username=username, max_minutes=max_minutes, diets=diets, tags=tags, must_use=must_use,
+        mentions=message_terms(message),
     )
     result: dict[str, Any] = {"candidates": candidates, "picks": [], "reply": "", "ai": False}
     if not candidates:
@@ -357,7 +416,7 @@ def suggest(
         return result
     payload = {
         "candidates": [
-            {k: c[k] for k in ("id", "name", "total_minutes", "tags", "coverage", "have", "missing")}
+            {k: c[k] for k in ("id", "name", "total_minutes", "tags", "coverage", "have", "missing", "mentioned")}
             for c in candidates
         ],
         "on_hand": have[:60],
@@ -369,7 +428,7 @@ def suggest(
         "message": message[:1000],
     }
     try:
-        answer = _ask(_SUGGEST_PROMPT.format(language=_language()), payload, SousChefSuggestions)
+        answer = _ask(_SUGGEST_PROMPT.format(language=reply_language(lang)), payload, SousChefSuggestions)
     except SousChefUnavailable as exc:
         result["picks"] = [{"recipe": c, "why": "", "substitutions": []} for c in candidates[:MAX_PICKS]]
         result["error"] = str(exc)
@@ -457,14 +516,14 @@ def substitute(food: str, recipe_id: str | None = None) -> list[dict]:
     return [o.model_dump() for o in answer.options[:3]]
 
 
-def use_it_up(*, username: str | None, days: int = 3, use_ai: bool = True) -> dict:
+def use_it_up(*, username: str | None, days: int = 3, use_ai: bool = True, lang: str | None = None) -> dict:
     soon = pantry.expiring(days)
     foods = [i["food"] for i in soon]
     if not foods:
         return {"expiring": [], "candidates": [], "picks": [], "reply": "", "ai": False}
     result = suggest(
         username=username, on_hand=foods, use_pantry=True, must_use=foods,
-        message="Use up the items that expire soon: " + ", ".join(foods), use_ai=use_ai,
+        message="Use up the items that expire soon: " + ", ".join(foods), use_ai=use_ai, lang=lang,
     )
     result["expiring"] = soon
     return result

@@ -67,7 +67,10 @@ function PickCard({ candidate, why, substitutions }: {
 function AssistantTurn({ result, title }: { result: SuggestResult; title?: string }) {
   const { t } = useTranslation()
   const picked = new Set(result.picks.map((p) => p.recipe.id))
-  const others = result.candidates.filter((c) => !picked.has(c.id)).slice(0, 6)
+  // Without anything to match on, the rest of the pool is just the library in some order.
+  const others = result.candidates
+    .filter((c) => !picked.has(c.id) && (c.have.length > 0 || (c.mentioned?.length ?? 0) > 0))
+    .slice(0, 6)
   return (
     <div className="grid gap-3">
       {title && <p className="text-sm font-medium">{title}</p>}
@@ -99,7 +102,7 @@ function AssistantTurn({ result, title }: { result: SuggestResult; title?: strin
 }
 
 export function SousChefPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [params, setParams] = useSearchParams()
@@ -135,12 +138,13 @@ export function SousChefPage() {
         const { draft: d } = await kitchen.invent({ ingredients, message: text, use_pantry: usePantry, diets, max_minutes: maxMinutes })
         setDraft(d)
       } else if (kind === 'useup') {
-        const result = await kitchen.useItUp(3)
+        const result = await kitchen.useItUp(3, i18n.language)
         const names = result.expiring?.map((i) => i.food).join(', ')
         setTurns((prev) => [...prev, { role: 'assistant', result, title: names ? t('souschef.useItUpTitle', { names }) : t('souschef.nothingExpiring') }])
       } else {
         const result = await kitchen.suggest({
           ingredients, use_pantry: usePantry, message: text, history: history(), max_minutes: maxMinutes, diets,
+          lang: i18n.language,
         })
         setTurns((prev) => [...prev, { role: 'assistant', result }])
       }

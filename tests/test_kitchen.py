@@ -286,6 +286,37 @@ def test_scoring_ranks_by_coverage_and_diet(kitchen):
     assert len(souschef.score_recipes([])) == 3
 
 
+def test_message_words_find_recipes(kitchen, monkeypatch):
+    from kitchen import souschef
+    from kitchen.recipes import save_from_schema
+
+    ids = _library_for_souschef()
+    ids["asparagus"] = save_from_schema(_schema(
+        name="פסטה ירוקה", ingredients=["200 גרם אספרגוס", "250 גרם פסטה", "1 לימון"],
+    ))
+
+    assert souschef.message_terms("משהו עם ואספרגוס לארוחת ערב") == ["אספרגוס", "ואספרגוס"]
+    assert "with" not in souschef.message_terms("something with eggplant")
+
+    seen = {}
+
+    def fake_ask(system, payload, model):
+        seen["system"] = system
+        seen["top"] = payload["candidates"][0]
+        return souschef.SousChefSuggestions(reply="יש", picks=[])
+
+    monkeypatch.setattr(souschef, "_ask", fake_ask)
+    souschef.suggest(username="dana", on_hand=[], message="ואספרגוס", lang="he")
+    assert seen["top"]["id"] == ids["asparagus"]
+    assert seen["top"]["mentioned"] == ["אספרגוס"]
+    assert "in Hebrew." in seen["system"]
+
+    # A recipe the message names still shows up when the typed ingredients miss it.
+    ranked = souschef.score_recipes(["chicken"], mentions=["eggplant"], seed=1)
+    assert {r["id"] for r in ranked} == {ids["chicken"], ids["eggplant"]}
+    assert ranked[0]["id"] == ids["eggplant"]
+
+
 def test_suggest_drops_ids_outside_candidates(kitchen, monkeypatch):
     from kitchen import souschef
 

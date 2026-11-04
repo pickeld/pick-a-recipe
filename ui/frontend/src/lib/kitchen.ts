@@ -262,6 +262,7 @@ export interface Candidate {
   coverage: number
   have: string[]
   missing: string[]
+  mentioned?: string[]
   score: number
   favorite: boolean
   last_cooked: string | null
@@ -476,7 +477,7 @@ export const kitchen = {
 
   // Sous Chef
   diets: () => request<{ diets: string[] }>(`${K}/souschef/diets`),
-  suggest: (body: { ingredients: string[]; use_pantry?: boolean; message?: string; history?: ChatTurn[]; max_minutes?: number | null; diets?: string[]; tags?: string[]; ai?: boolean }) =>
+  suggest: (body: { ingredients: string[]; use_pantry?: boolean; message?: string; history?: ChatTurn[]; max_minutes?: number | null; diets?: string[]; tags?: string[]; ai?: boolean; lang?: string }) =>
     request<SuggestResult>(`${K}/souschef/suggest`, { method: 'POST', json: body }),
   invent: (body: { ingredients: string[]; message?: string; use_pantry?: boolean; diets?: string[]; max_minutes?: number | null }) =>
     request<{ draft: SchemaRecipe }>(`${K}/souschef/invent`, { method: 'POST', json: body }),
@@ -485,7 +486,8 @@ export const kitchen = {
     request<{ options: { use: string; amount: string; notes: string }[] }>(`${K}/souschef/substitute`, {
       method: 'POST', json: { food, recipe_id: recipeId },
     }),
-  useItUp: (days = 3) => request<SuggestResult>(`${K}/souschef/use-it-up`, { method: 'POST', json: { days } }),
+  useItUp: (days = 3, lang?: string) =>
+    request<SuggestResult>(`${K}/souschef/use-it-up`, { method: 'POST', json: { days, lang } }),
   planWeek: (body: { start: string; end: string; slots: Slot[]; message?: string; use_pantry?: boolean }) =>
     request<WeekPlanResult>(`${K}/souschef/plan-week`, { method: 'POST', json: body }),
   applyPlan: (assignments: WeekPlanResult['assignments'], servings?: number | null) =>
