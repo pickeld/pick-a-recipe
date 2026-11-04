@@ -23,9 +23,7 @@ import {
   DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
   DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Rating, RecipeImage, errorText, useMinutesLabel } from '@/components/kitchen/bits'
 import { AddToPlanDialog } from '@/components/kitchen/plan-dialog'
@@ -107,12 +105,11 @@ function ReviewDialog({ recipeId, open, onClose }: { recipeId: string; open: boo
 function CookedDialog({ recipe, servings, open, onClose }: { recipe: Recipe; servings: number | null; open: boolean; onClose: () => void }) {
   const { t } = useTranslation()
   const qc = useQueryClient()
-  const [deduct, setDeduct] = useState(false)
   const [note, setNote] = useState('')
   const mark = useMutation({
-    mutationFn: () => kitchen.markCooked(recipe.id, { servings, note, deduct_pantry: deduct }),
-    onSuccess: (res) => {
-      toast.success(deduct ? t('cooked.doneDeducted', { count: res.deducted.length }) : t('cooked.done'))
+    mutationFn: () => kitchen.markCooked(recipe.id, { servings, note }),
+    onSuccess: () => {
+      toast.success(t('cooked.done'))
       void qc.invalidateQueries({ queryKey: ['kitchen', 'recipe', recipe.id] })
       void qc.invalidateQueries({ queryKey: ['kitchen', 'recipes'] })
       onClose()
@@ -123,10 +120,6 @@ function CookedDialog({ recipe, servings, open, onClose }: { recipe: Recipe; ser
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
         <DialogHeader><DialogTitle>{t('cooked.title')}</DialogTitle></DialogHeader>
-        <div className="flex items-center justify-between gap-3">
-          <Label htmlFor="deduct">{t('cooked.deduct')}</Label>
-          <Switch id="deduct" checked={deduct} onCheckedChange={setDeduct} />
-        </div>
         <Textarea placeholder={t('cooked.note')} value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
@@ -228,7 +221,7 @@ export function RecipePage() {
         only_foods: onlyMissing ? missing.map((i) => i.food).filter(Boolean) : undefined,
       })
       void qc.invalidateQueries({ queryKey: ['kitchen', 'shopping'] })
-      toast.success(t('shopping.addedFromRecipe', { count: res.added, excluded: res.excluded }), {
+      toast.success(t('shopping.addedFromRecipe', { count: res.added }), {
         action: { label: t('nav.shopping'), onClick: () => navigate('/shopping') },
       })
     } catch (err) {

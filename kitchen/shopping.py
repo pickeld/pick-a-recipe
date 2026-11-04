@@ -11,13 +11,14 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from kitchen import aisles, pantry
+from kitchen import aisles
 from kitchen.aisles import food_key
 from kitchen.convert import from_base, to_base
 from kitchen.db import connect
 from kitchen.recipes import RecipeInvalid, RecipeNotFound, get_recipe
 
 DEFAULT_LIST_NAME = "Shopping list"
+ALWAYS_HAVE = frozenset({"water", "מים", "ice", "קרח"})
 
 
 def _now() -> str:
@@ -258,31 +259,14 @@ def clear(list_id: int, *, checked_only: bool = True) -> int:
         return cur.rowcount
 
 
-def move_to_pantry(item_ids: list[int]) -> int:
-    """Bought: add the items to the pantry and drop them from the list."""
-    moved = 0
-    with connect() as conn:
-        rows = [conn.execute("SELECT * FROM shopping_items WHERE id = ?", (int(i),)).fetchone() for i in item_ids]
-    for row in rows:
-        if not row:
-            continue
-        pantry.add_item(food=row["food"], quantity=row["quantity_value"], unit=row["unit"])
-        with connect() as conn:
-            conn.execute("DELETE FROM shopping_items WHERE id = ?", (row["id"],))
-            conn.commit()
-        moved += 1
-    return moved
-
-
 # ===== Generating =====
 
 def add_recipe(list_id: int, recipe_id: str, servings: float | None = None, *,
-               conn=None, overrides: dict | None = None, pantry_items: list[dict] | None = None,
+               conn=None, overrides: dict | None = None,
                only_foods: set[str] | None = None) -> dict:
     """Add a recipe's ingredients (scaled) to a list. Returns counts."""
     recipe = get_recipe(recipe_id, servings=servings)
     source = [{"id": recipe["id"], "name": recipe["name"]}]
-    stock = pantry_items if pantry_items is not None else pantry.list_items()
     own = conn is None
     if own:
         conn_ctx = connect()
@@ -290,28 +274,19 @@ def add_recipe(list_id: int, recipe_id: str, servings: float | None = None, *,
     try:
         _ensure_list(conn, list_id)
         overrides = overrides if overrides is not None else aisles.load_overrides()
-        added = excluded = 0
+        added = 0
         for ing in recipe["ingredients"]:
             if only_foods is not None and food_key(ing["food"]) not in only_foods:
                 continue
-            if food_key(ing["food"]) in pantry.ALWAYS_HAVE:
+            if food_key(ing["food"]) in ALWAYS_HAVE:
                 continue
-            amount, unit = ing["amount"], ing["unit"]
-            state, remaining = pantry.coverage(ing["food"], amount, unit, stock)
-            if state == "full":
-                _merge_into(conn, list_id, ing["food"], amount, unit, source, manual=False,
-                            excluded=True, note=ing["notes"], overrides=overrides)
-                excluded += 1
-                continue
-            if state == "partial":
-                amount = remaining
-            _merge_into(conn, list_id, ing["food"], amount, unit, source, manual=False,
+            _merge_into(conn, list_id, ing["food"], ing["amount"], ing["unit"], source, manual=False,
                         excluded=False, note=ing["notes"] if not ing["optional"] else "optional",
                         overrides=overrides)
             added += 1
         if own:
             conn.commit()
-        return {"added": added, "excluded": excluded}
+        return {"added": added}
     finally:
         if own:
             conn_ctx.__exit__(None, None, None)
@@ -320,18 +295,13 @@ def add_recipe(list_id: int, recipe_id: str, servings: float | None = None, *,
 def generate_from_plan(list_id: int, start: str, end: str) -> dict:
     from kitchen.mealplan import cooking_plan
 
-    totals = {"added": 0, "excluded": 0, "recipes": 0}
-    stock = pantry.list_items()
+    totals = {"added": 0, "recipes": 0}
     overrides = aisles.load_overrides()
     with connect() as conn:
         _ensure_list(conn, list_id)
         for meal in cooking_plan(start, end):
-            result = add_recipe(
-                list_id, meal["recipe_id"], meal["servings"], conn=conn,
-                overrides=overrides, pantry_items=stock,
-            )
+            result = add_recipe(list_id, meal["recipe_id"], meal["servings"], conn=conn, overrides=overrides)
             totals["added"] += result["added"]
-            totals["excluded"] += result["excluded"]
             totals["recipes"] += 1
         conn.commit()
     return totals

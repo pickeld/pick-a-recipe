@@ -1,4 +1,4 @@
-"""Kitchen library, planner, shopping, pantry, Sous Chef and importers."""
+"""Kitchen library, planner, shopping, Sous Chef and importers."""
 
 import base64
 import gzip
@@ -143,24 +143,22 @@ def test_images_are_reencoded_and_path_safe(kitchen):
         images.store_image_bytes(b"<svg></svg>")
 
 
-# ===== Shopping and pantry =====
+# ===== Shopping =====
 
-def test_shopping_merges_and_respects_pantry(kitchen):
-    from kitchen import pantry, shopping
+def test_shopping_merges_recipes(kitchen):
+    from kitchen import shopping
     from kitchen.recipes import save_from_schema
 
     a = save_from_schema(_schema())
     b = save_from_schema(_schema(name="Tomato soup", ingredients=["400 g tomatoes", "1 onion", "1 l water"]))
-    pantry.add_item(food="garlic", quantity=10, unit="cloves")
     list_id = shopping.default_list_id()
-    first = shopping.add_recipe(list_id, a)
-    assert first["excluded"] == 1  # garlic
+    shopping.add_recipe(list_id, a)
     shopping.add_recipe(list_id, b)
 
     items = {i["food"]: i for i in shopping.list_items(list_id)}
     assert items["tomatoes"]["quantity"] == 1200
     assert len(items["tomatoes"]["sources"]) == 2
-    assert items["garlic"]["excluded"]
+    assert not items["garlic"]["excluded"]
     assert "water" not in items
     groups = [g["aisle"] for g in shopping.grouped(list(items.values()))]
     assert groups.index("produce") < groups.index("pantry")
@@ -181,21 +179,6 @@ def test_shopping_last_write_wins(kitchen):
     assert shopping.list_items(list_id)[0]["checked"]
     future = shopping.update_item(item, {"note": "ripe", "client_ts": "2999-01-01T00:00:00Z"})
     assert future["updated_at"] < "2999"
-
-
-def test_pantry_merges_and_deducts(kitchen):
-    from kitchen import pantry
-    from kitchen.recipes import save_from_schema
-
-    pantry.add_item(food="pasta", quantity=500, unit="g")
-    pantry.add_item(food="pasta", quantity=0.5, unit="kg")
-    items = pantry.list_items()
-    assert len(items) == 1 and (items[0]["quantity"], items[0]["unit"]) == (1, "kg")
-
-    rid = save_from_schema(_schema())
-    pantry.deduct_recipe(rid, servings=2)
-    left = pantry.list_items()[0]
-    assert (left["quantity"], left["unit"]) == (0.8, "kg")
 
 
 # ===== Meal plan =====

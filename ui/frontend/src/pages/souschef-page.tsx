@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { AlarmClock, ChefHat, Heart, Lightbulb, Send, Sparkles, Wand2 } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { ChefHat, Heart, Lightbulb, Send, Sparkles, Wand2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { isUnavailable, kitchen, type Candidate, type ChatTurn, type SchemaRecipe, type SuggestResult } from '@/lib/kitchen'
@@ -12,14 +12,13 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { ChipsInput, Minutes, PageHeader, RecipeImage, errorText } from '@/components/kitchen/bits'
 import { RecipeEditor, valuesFromSchema, valuesToSchema } from '@/components/kitchen/recipe-editor'
 
 type Turn =
   | { role: 'user'; text: string }
-  | { role: 'assistant'; result: SuggestResult; title?: string }
+  | { role: 'assistant'; result: SuggestResult }
 
 const TIME_OPTIONS = ['any', '15', '30', '45', '60', '90']
 
@@ -64,7 +63,7 @@ function PickCard({ candidate, why, substitutions }: {
   )
 }
 
-function AssistantTurn({ result, title }: { result: SuggestResult; title?: string }) {
+function AssistantTurn({ result }: { result: SuggestResult }) {
   const { t } = useTranslation()
   const picked = new Set(result.picks.map((p) => p.recipe.id))
   // Without anything to match on, the rest of the pool is just the library in some order.
@@ -73,7 +72,6 @@ function AssistantTurn({ result, title }: { result: SuggestResult; title?: strin
     .slice(0, 6)
   return (
     <div className="grid gap-3">
-      {title && <p className="text-sm font-medium">{title}</p>}
       {result.reply && (
         <div className="flex gap-2">
           <ChefHat className="mt-0.5 size-5 shrink-0 text-primary" />
@@ -105,14 +103,12 @@ export function SousChefPage() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const [params, setParams] = useSearchParams()
   const [ingredients, setIngredients] = useState<string[]>([])
-  const [usePantry, setUsePantry] = useState(true)
   const [diets, setDiets] = useState<string[]>([])
   const [maxTime, setMaxTime] = useState('any')
   const [message, setMessage] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
-  const [busy, setBusy] = useState<'suggest' | 'invent' | 'useup' | null>(null)
+  const [busy, setBusy] = useState<'suggest' | 'invent' | null>(null)
   const [draft, setDraft] = useState<SchemaRecipe | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
@@ -129,21 +125,17 @@ export function SousChefPage() {
       ? { role: 'user', text: tu.text }
       : { role: 'assistant', text: tu.result.reply || tu.result.picks.map((p) => p.recipe.name).join(', ') }))
 
-  const run = async (kind: 'suggest' | 'invent' | 'useup', text: string) => {
+  const run = async (kind: 'suggest' | 'invent', text: string) => {
     if (busy) return
     setBusy(kind)
     if (text) setTurns((prev) => [...prev, { role: 'user', text }])
     try {
       if (kind === 'invent') {
-        const { draft: d } = await kitchen.invent({ ingredients, message: text, use_pantry: usePantry, diets, max_minutes: maxMinutes })
+        const { draft: d } = await kitchen.invent({ ingredients, message: text, diets, max_minutes: maxMinutes })
         setDraft(d)
-      } else if (kind === 'useup') {
-        const result = await kitchen.useItUp(3, i18n.language)
-        const names = result.expiring?.map((i) => i.food).join(', ')
-        setTurns((prev) => [...prev, { role: 'assistant', result, title: names ? t('souschef.useItUpTitle', { names }) : t('souschef.nothingExpiring') }])
       } else {
         const result = await kitchen.suggest({
-          ingredients, use_pantry: usePantry, message: text, history: history(), max_minutes: maxMinutes, diets,
+          ingredients, message: text, history: history(), max_minutes: maxMinutes, diets,
           lang: i18n.language,
         })
         setTurns((prev) => [...prev, { role: 'assistant', result }])
@@ -154,15 +146,6 @@ export function SousChefPage() {
       setBusy(null)
     }
   }
-
-  useEffect(() => {
-    if (params.get('mode') === 'use-it-up') {
-      setParams({}, { replace: true })
-      void run('useup', '')
-    }
-    // Runs once for the deep link from the pantry page.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -179,10 +162,6 @@ export function SousChefPage() {
           <Label>{t('souschef.haveIngredients')}</Label>
           <ChipsInput value={ingredients} onChange={setIngredients} placeholder={t('souschef.ingredientsPlaceholder')} />
         </div>
-        <label className="flex items-center justify-between gap-2 text-sm">
-          {t('souschef.usePantry')}
-          <Switch checked={usePantry} onCheckedChange={setUsePantry} />
-        </label>
         <div className="grid gap-1.5">
           <Label>{t('souschef.maxTime')}</Label>
           <Select value={maxTime} onValueChange={setMaxTime}>
@@ -217,9 +196,7 @@ export function SousChefPage() {
         )}
         <div className="grid gap-2">
           <Button onClick={() => void run('suggest', '')} disabled={!!busy}><Sparkles className="size-4" />{t('souschef.findRecipes')}</Button>
-          <Button variant="outline" onClick={() => void run('invent', message.trim())} disabled={!!busy}><Wand2 className="size-4" />{t('souschef.inventNew')}</Button>
-          <Button variant="outline" onClick={() => void run('useup', '')} disabled={!!busy}><AlarmClock className="size-4" />{t('souschef.useItUp')}</Button>
-        </div>
+          <Button variant="outline" onClick={() => void run('invent', message.trim())} disabled={!!busy}><Wand2 className="size-4" />{t('souschef.inventNew')}</Button>        </div>
       </aside>
 
       <section className="flex min-h-[60vh] flex-col rounded-xl border">
@@ -235,7 +212,7 @@ export function SousChefPage() {
               <p className="max-w-[80%] rounded-2xl bg-primary px-3 py-2 text-sm text-primary-foreground" dir="auto">{tu.text}</p>
             </div>
           ) : (
-            <AssistantTurn key={i} result={tu.result} title={tu.title} />
+            <AssistantTurn key={i} result={tu.result} />
           )))}
           {busy && <p className="animate-pulse text-sm text-muted-foreground">{t('souschef.thinking')}</p>}
           <div ref={endRef} />

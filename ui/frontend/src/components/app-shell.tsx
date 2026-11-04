@@ -19,7 +19,6 @@ const TITLES: Record<string, string> = {
   '/library': 'nav.library',
   '/planner': 'nav.planner',
   '/shopping': 'nav.shopping',
-  '/pantry': 'nav.pantry',
   '/souschef': 'nav.souschef',
   '/import': 'nav.import',
   '/cook-log': 'nav.cookLog',

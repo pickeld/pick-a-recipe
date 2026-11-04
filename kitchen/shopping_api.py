@@ -150,15 +150,3 @@ def clear():
     removed = shopping.clear(list_id, checked_only=data.get("all") is not True)
     notify("shopping", list_id=list_id)
     return jsonify({"removed": removed})
-
-
-@bp.post("/shopping/to-pantry")
-def to_pantry():
-    data = body()
-    ids = data.get("ids")
-    if not isinstance(ids, list):
-        raise KitchenError("ids must be a list")
-    moved = shopping.move_to_pantry([i for i in ids if isinstance(i, int)][:500])
-    notify("shopping")
-    notify("pantry")
-    return jsonify({"moved": moved})

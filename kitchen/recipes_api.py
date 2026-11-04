@@ -149,12 +149,7 @@ def mark_cooked(recipe_id: str):
         current_user(), recipe_id, cooked_on=data.get("cooked_on"), servings=servings,
         note=str(data.get("note") or ""),
     )
-    deducted: list[dict] = []
-    if data.get("deduct_pantry"):
-        from kitchen import pantry
-        deducted = pantry.deduct_recipe(recipe_id, servings)
-        notify("pantry")
-    return jsonify({"id": entry_id, "deducted": deducted}), 201
+    return jsonify({"id": entry_id}), 201
 
 
 @bp.get("/cook-log")

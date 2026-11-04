@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import {
-  Archive, ChevronDown, CloudOff, MoreHorizontal, PackageCheck, Pencil, Plus, ShoppingBasket, Trash2,
+  Archive, ChevronDown, CloudOff, MoreHorizontal, Pencil, Plus, ShoppingBasket, Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -214,7 +214,6 @@ export function ShoppingPage() {
     setQuick('')
   }
 
-  const checkedIds = view?.checked.map((i) => i.id).filter((id) => id > 0) ?? []
   const openCount = view?.groups.reduce((n, g) => n + g.items.length, 0) ?? 0
 
   return (
@@ -293,14 +292,6 @@ export function ShoppingPage() {
               <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
                 <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t('shopping.inCart', { count: view.checked.length })}</p>
                 <div className="ms-auto flex gap-1.5">
-                  <Button size="xs" variant="outline" disabled={!checkedIds.length} onClick={async () => {
-                    const r = await kitchen.toPantry(checkedIds)
-                    toast.success(t('shopping.movedToPantry', { count: r.moved }))
-                    refresh()
-                    void qc.invalidateQueries({ queryKey: ['kitchen', 'pantry'] })
-                  }}>
-                    <PackageCheck className="size-3.5" />{t('shopping.toPantry')}
-                  </Button>
                   <Button size="xs" variant="outline" onClick={async () => { if (activeId) { await kitchen.clearShopping(activeId); refresh() } }}>
                     <Archive className="size-3.5" />{t('shopping.clearChecked')}
                   </Button>
@@ -320,7 +311,7 @@ export function ShoppingPage() {
         <div className="mt-4">
           <Button variant="ghost" size="sm" onClick={() => setShowExcluded((s) => !s)} aria-expanded={showExcluded}>
             <ChevronDown className={cn('size-4 transition-transform', showExcluded && 'rotate-180')} />
-            {t('shopping.inPantry', { count: view.excluded.length })}
+            {t('shopping.alreadyHave', { count: view.excluded.length })}
           </Button>
           {showExcluded && (
             <ul className="mt-1 divide-y rounded-lg border opacity-80">

@@ -17,7 +17,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 from helpers import setup_logger
-from kitchen import pantry
 from kitchen.aisles import _KEYWORDS, food_key
 from kitchen.db import connect
 from kitchen.recipes import RecipeInvalid, RecipeNotFound, get_recipe, image_url
@@ -268,7 +267,6 @@ def score_recipes(
     max_minutes: int | None = None,
     diets: list[str] | None = None,
     tags: list[str] | None = None,
-    must_use: list[str] | None = None,
     mentions: list[str] | None = None,
     limit: int = CANDIDATES,
     seed: int | None = None,
@@ -280,7 +278,6 @@ def score_recipes(
     """
     have_keys = [food_key(h) for h in have if food_key(h)]
     mention_terms = [m.casefold() for m in (mentions or []) if m.strip()]
-    must_keys = [food_key(m) for m in (must_use or []) if food_key(m)]
     today = date.today()
     rng = random.Random(seed)
     with connect() as conn:
@@ -310,8 +307,6 @@ def score_recipes(
         if wanted_tags and not wanted_tags & {t.casefold() for t in recipe["tags"]}:
             continue
         relevant = [i["food"] for i in recipe["ingredients"] if not i["optional"] and not is_basic(i["food"])]
-        if must_keys and not any(has_food(must_keys, f) for f in relevant):
-            continue
         matched = [f for f in relevant if has_food(have_keys, f)] if have_keys else []
         missing = [f for f in relevant if f not in matched] if have_keys else []
         text = " ".join([recipe["name"], *foods, *recipe["tags"]]).casefold()
@@ -391,21 +386,17 @@ def suggest(
     *,
     username: str | None,
     on_hand: list[str],
-    use_pantry: bool = False,
     message: str = "",
     history: list[dict] | None = None,
     max_minutes: int | None = None,
     diets: list[str] | None = None,
     tags: list[str] | None = None,
-    must_use: list[str] | None = None,
     use_ai: bool = True,
     lang: str | None = None,
 ) -> dict:
     have = [h for h in on_hand if str(h).strip()][:60]
-    if use_pantry:
-        have += [i["food"] for i in pantry.list_items()]
     candidates = score_recipes(
-        have, username=username, max_minutes=max_minutes, diets=diets, tags=tags, must_use=must_use,
+        have, username=username, max_minutes=max_minutes, diets=diets, tags=tags,
         mentions=message_terms(message),
     )
     result: dict[str, Any] = {"candidates": candidates, "picks": [], "reply": "", "ai": False}
@@ -463,14 +454,12 @@ Write name, description, steps, foods and notes in {language}.
 """
 
 
-def invent(*, username: str | None, on_hand: list[str], message: str = "", use_pantry: bool = False,
+def invent(*, username: str | None, on_hand: list[str], message: str = "",
            diets: list[str] | None = None, max_minutes: int | None = None) -> dict:
     from chef import postprocess_recipe
     from recipe_schema import RecipeExtraction, recipe_dict_from_extraction
 
     have = [h for h in on_hand if str(h).strip()][:60]
-    if use_pantry:
-        have += [i["food"] for i in pantry.list_items()]
     with connect() as conn:
         tags = [r["name"] for r in conn.execute(
             "SELECT t.name, COUNT(*) AS n FROM recipe_tags rt JOIN tags t ON t.id = rt.tag_id"
@@ -516,19 +505,6 @@ def substitute(food: str, recipe_id: str | None = None) -> list[dict]:
     return [o.model_dump() for o in answer.options[:3]]
 
 
-def use_it_up(*, username: str | None, days: int = 3, use_ai: bool = True, lang: str | None = None) -> dict:
-    soon = pantry.expiring(days)
-    foods = [i["food"] for i in soon]
-    if not foods:
-        return {"expiring": [], "candidates": [], "picks": [], "reply": "", "ai": False}
-    result = suggest(
-        username=username, on_hand=foods, use_pantry=True, must_use=foods,
-        message="Use up the items that expire soon: " + ", ".join(foods), use_ai=use_ai, lang=lang,
-    )
-    result["expiring"] = soon
-    return result
-
-
 _PLAN_PROMPT = """You are Sous Chef, planning meals from the user's own recipes.
 
 Fill each slot in "slots" (date + slot name) with one recipe from "candidates", using its exact
@@ -540,19 +516,13 @@ Leave a slot out rather than forcing a bad fit. "why" is one short phrase.
 """
 
 
-def plan_week(*, username: str | None, start: str, end: str, slots: list[str], message: str = "",
-              use_pantry: bool = True) -> dict:
+def plan_week(*, username: str | None, start: str, end: str, slots: list[str], message: str = "") -> dict:
     from kitchen import mealplan
 
     open_slots = mealplan.empty_slots(start, end, slots or ["dinner"])
     if not open_slots:
         return {"summary": "", "assignments": []}
-    have = [i["food"] for i in pantry.list_items()] if use_pantry else []
-    candidates = score_recipes(have, username=username, limit=40) if have else []
-    if len(candidates) < 10:
-        extra = score_recipes([], username=username, limit=40)
-        known = {c["id"] for c in candidates}
-        candidates += [c for c in extra if c["id"] not in known]
+    candidates = score_recipes([], username=username, limit=40)
     if not candidates:
         return {"summary": "", "assignments": []}
     payload = {
