@@ -47,7 +47,10 @@ from job_manager import (
     init_job_manager, get_job_manager, resolve_max_concurrent,
     prune_artifact_dirs,
 )
-from uploaders import upload_recipe_to_targets, get_enabled_targets, format_targets
+from uploaders import (
+    TARGET_LABELS, upload_recipe_to_targets, upload_to_target,
+    get_enabled_targets, format_targets,
+)
 
 app = Flask(__name__)
 
@@ -1775,25 +1778,11 @@ def reupload_recipe(history_id):
 
     try:
         config.reload()
-        image_uploaded = False
-
-        if target == 'tandoor':
-            from tandoor import Tandoor
-            tandoor = Tandoor()
-            result = tandoor.create_recipe(recipe_data)
-            if image_path and result.get("id"):
-                image_uploaded = bool(tandoor.upload_image(result["id"], image_path))
-        elif target == 'mealie':
-            from mealie import Mealie
-            mealie = Mealie()
-            result = mealie.create_recipe(recipe_data)
-            recipe_slug = result.get("slug") or result.get("id")
-            if image_path and recipe_slug:
-                image_uploaded = bool(mealie.upload_image(recipe_slug, image_path))
-        else:
-            hint = ('no recipe manager is enabled — enable Mealie and/or '
-                    'Tandoor in Settings') if not target else f'Unknown target: {target}'
+        if target not in TARGET_LABELS:
+            hint = ('no destination is enabled — turn on the Library, Mealie '
+                    'and/or Tandoor in Settings') if not target else f'Unknown target: {target}'
             return jsonify({'error': hint}), 400
+        image_uploaded = upload_to_target(target, recipe_data, image_path)
 
         message = f'Recipe re-uploaded to {target}'
         if image_path and not image_uploaded:
@@ -2798,6 +2787,19 @@ def _reemit_parked_previews() -> None:
 
 
 _reemit_parked_previews()
+
+
+# ===== Kitchen (library, planner, shopping, pantry, Sous Chef) =====
+
+import kitchen.web as kitchen_web  # noqa: E402
+
+kitchen_web.init_app(
+    app,
+    socketio=socketio,
+    current_user=_current_username,
+    is_admin=_current_user_is_admin,
+    start_backfill=os.getenv('KITCHEN_BACKFILL', 'true').lower() not in ('false', '0', 'no'),
+)
 
 
 # ===== SPA Catch-All Route =====

@@ -72,6 +72,7 @@ export default defineConfig({
           /^\/logout/,
           /^\/share/,
           /^\/healthz/,
+          /^\/ics\//,
         ],
         runtimeCaching: [
           {
@@ -107,6 +108,7 @@ export default defineConfig({
       '/logout': { target: 'http://localhost:5006', changeOrigin: true },
       '/share': { target: 'http://localhost:5006', changeOrigin: true },
       '/healthz': { target: 'http://localhost:5006', changeOrigin: true },
+      '/ics': { target: 'http://localhost:5006', changeOrigin: true },
     },
   },
   build: {

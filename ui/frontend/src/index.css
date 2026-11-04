@@ -140,3 +140,24 @@ input:-webkit-autofill {
     @apply font-sans;
     }
 }
+/* Printed recipes: just the recipe, no app chrome. */
+@media print {
+  .no-print,
+  [data-slot='sidebar'],
+  [data-slot='sidebar-gap'],
+  [data-sonner-toaster] {
+    display: none !important;
+  }
+  [data-slot='sidebar-inset'] {
+    margin: 0 !important;
+  }
+  body {
+    background: white;
+    color: black;
+  }
+  a[href^='http']::after {
+    content: ' (' attr(href) ')';
+    font-size: 0.75em;
+    word-break: break-all;
+  }
+}

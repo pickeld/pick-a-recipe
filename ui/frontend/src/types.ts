@@ -310,6 +310,7 @@ export interface AppConfig {
   tandoor_host: string
   target_language: string
   /** String booleans! "true" / "false" */
+  library_enabled: string
   mealie_enabled: string
   tandoor_enabled: string
   whisper_model: string
@@ -414,6 +415,7 @@ export interface ServerToClientEvents {
   approval_confirmed: (p: ApprovalPayload) => void
   approval_rejected: (p: ApprovalPayload) => void
   approvals_updated: (p: { job_id: string }) => void
+  kitchen_changed: (p: { topic: string; id?: string | number; job?: string }) => void
 }
 
 export interface ClientToServerEvents {

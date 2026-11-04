@@ -120,6 +120,26 @@ def canonicalize_unit(unit: str) -> str:
     return unit.strip()
 
 
+def unit_family(unit: str) -> tuple[str, float]:
+    """``(family, size)`` for a unit: grams per unit for mass, ml for volume.
+
+    Family is ``mass``, ``volume``, ``count``, ``pinch`` or ``""`` when the
+    unit is unknown (or absent); size is 1 for everything but mass and volume.
+    """
+    folded = _fold(unit)
+    if not folded:
+        return "", 1.0
+    if folded in _MASS_G:
+        return "mass", _MASS_G[folded]
+    if folded in _VOLUME_ML:
+        return "volume", _VOLUME_ML[folded]
+    if folded in _COUNT_UNITS or folded == "piece":
+        return "count", 1.0
+    if folded in _PINCH_UNITS or folded == "pinch":
+        return "pinch", 1.0
+    return "", 1.0
+
+
 def quantity_to_grams(
     quantity: str,
     unit: str,
