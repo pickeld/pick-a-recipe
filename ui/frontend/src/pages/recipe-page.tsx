@@ -9,7 +9,7 @@ import {
 import { toast } from 'sonner'
 
 import { isUnavailable, kitchen, type Ingredient, type Recipe, type UnitSystem } from '@/lib/kitchen'
-import { isoToMinutes } from '@/lib/kitchen-format'
+import { isoToMinutes, recipeDirection } from '@/lib/kitchen-format'
 import { cn } from '@/lib/utils'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
@@ -217,6 +217,7 @@ export function RecipePage() {
     return <p className="text-destructive">{error ? errorText(error) : t('recipe.notFound')}</p>
   }
 
+  const contentDir = recipeDirection(recipe)
   const missing = recipe.ingredients.filter((i) => !checked.has(i.position))
   const image = recipe.images[imageIndex]?.url ?? recipe.image_url
 
@@ -384,7 +385,7 @@ export function RecipePage() {
 
         <div className="grid content-start gap-3">
           <div className="flex items-start justify-between gap-3">
-            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl" dir="auto">{recipe.name}</h2>
+            <h2 className="flex-1 text-2xl font-bold tracking-tight sm:text-3xl" dir={contentDir ?? 'auto'}>{recipe.name}</h2>
             <Button
               variant="ghost"
               size="icon"
@@ -396,7 +397,7 @@ export function RecipePage() {
               <Heart className={cn('size-5', recipe.user.favorite && 'fill-rose-500 text-rose-500')} />
             </Button>
           </div>
-          {recipe.description && <p className="text-muted-foreground" dir="auto">{recipe.description}</p>}
+          {recipe.description && <p className="text-muted-foreground" dir={contentDir ?? 'auto'}>{recipe.description}</p>}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {recipe.total_minutes ? <StatTile icon={<Clock />} tone="sky" label={t('recipe.totalTime')} value={minutesLabel(recipe.total_minutes)} /> : null}
             {isoToMinutes(recipe.prep_time) ? <StatTile icon={<Timer />} tone="violet" label={t('recipe.prep')} value={minutesLabel(isoToMinutes(recipe.prep_time))} /> : null}
@@ -417,7 +418,7 @@ export function RecipePage() {
             )}
           </div>
           {recipe.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5" dir={contentDir}>
               {recipe.tags.map((tag) => <Badge key={tag} variant="secondary" className="rounded-full px-2.5">{tag}</Badge>)}
             </div>
           )}
@@ -451,6 +452,7 @@ export function RecipePage() {
           <CardContent className="grid gap-3">
             <IngredientList
               ingredients={recipe.ingredients}
+              dir={contentDir}
               checked={checked}
               onToggle={(p) => setChecked((s) => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n })}
               onSubstitute={setSubstitute}
@@ -471,7 +473,7 @@ export function RecipePage() {
           <Card>
             <CardHeader><CardTitle>{t('recipe.steps')}</CardTitle></CardHeader>
             <CardContent>
-              {recipe.steps.length ? <StepList steps={recipe.steps} recipeName={recipe.name} /> : <p className="text-sm text-muted-foreground">{t('recipe.noSteps')}</p>}
+              {recipe.steps.length ? <StepList steps={recipe.steps} recipeName={recipe.name} dir={contentDir} /> : <p className="text-sm text-muted-foreground">{t('recipe.noSteps')}</p>}
             </CardContent>
           </Card>
           <Card>

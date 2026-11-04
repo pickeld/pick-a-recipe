@@ -2,11 +2,49 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
-  addDays, formatAmount, formatClock, isoToMinutes, minutesToIso, monthGrid, splitIngredients,
-  stepServings, weekStart,
+  addDays, formatAmount, formatClock, ingredientText, isoToMinutes, minutesToIso, monthGrid, recipeDirection, splitIngredients,
+  stepServings, textDirection, weekStart,
 } from './kitchen-format.ts'
 import { applyQueue, enqueue, remapTempId, type QueuedOp } from './shopping-queue.ts'
 import type { ShoppingItem, ShoppingPayload } from './kitchen.ts'
+
+describe('text direction', () => {
+  it('follows the script the recipe is written in', () => {
+    assert.equal(textDirection('', 'שקשוקה עם פלפלים'), 'rtl')
+    assert.equal(textDirection('', 'Shakshuka'), 'ltr')
+    assert.equal(textDirection('', 'סלט with feta וזיתים'), 'rtl')
+  })
+
+  it('trusts the text over a wrong language tag and falls back to the tag', () => {
+    assert.equal(textDirection('en', 'עוגת שוקולד'), 'rtl')
+    assert.equal(textDirection('he-IL', '200', '½'), 'rtl')
+    assert.equal(textDirection('en'), 'ltr')
+    assert.equal(textDirection('', '1/2'), undefined)
+  })
+
+  it('reads a recipe from its name, ingredients and steps', () => {
+    const recipe = { language: '', name: 'Ptitim', ingredients: [{ raw: '2 כוסות פתיתים' }, { raw: 'מלח' }], steps: [{ text: 'לבשל 8 דקות' }] }
+    assert.equal(recipeDirection(recipe), 'rtl')
+  })
+})
+
+describe('ingredient text', () => {
+  const base = { notes: '', amount: 2, scalable: true }
+
+  it('keeps the words of an unchanged line instead of the canonical unit', () => {
+    const line = { ...base, food: 'שמן זית', raw: '2 כפות שמן זית', quantity: '2', unit: 'tbsp', display_quantity: '2', display_unit: 'tbsp' }
+    assert.deepEqual(ingredientText(line, 'rtl'), { amount: '2 כפות', rest: 'שמן זית' })
+    const garlic = { ...base, amount: 3, food: 'garlic', raw: '3 cloves garlic', quantity: '3', unit: 'piece', display_quantity: '3', display_unit: 'piece' }
+    assert.deepEqual(ingredientText(garlic), { amount: '3 cloves', rest: 'garlic' })
+  })
+
+  it('names a scaled unit in the language of the recipe', () => {
+    const scaled = { ...base, amount: 4, food: 'שמן זית', raw: '2 כפות שמן זית', quantity: '2', unit: 'tbsp', display_quantity: '4', display_unit: 'tbsp' }
+    assert.deepEqual(ingredientText(scaled, 'rtl'), { amount: '4 כפות', rest: 'שמן זית' })
+    assert.deepEqual(ingredientText({ ...scaled, amount: 1, display_quantity: '1' }, 'rtl'), { amount: '1 כף', rest: 'שמן זית' })
+    assert.deepEqual(ingredientText({ ...scaled, food: 'olive oil', raw: '2 tbsp olive oil' }), { amount: '4 tbsp', rest: 'olive oil' })
+  })
+})
 
 describe('dates', () => {
   it('starts weeks on Sunday and crosses month ends', () => {

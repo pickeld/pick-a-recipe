@@ -1,5 +1,77 @@
 /** Date, duration and amount helpers for the kitchen pages. No DOM, no React. */
 
+const RTL_LANGUAGES = new Set(['he', 'iw', 'yi', 'ar', 'fa', 'ur'])
+const RTL_LETTERS = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/g
+const LTR_LETTERS = /[A-Za-z\u00C0-\u024F\u0400-\u04FF]/g
+
+/**
+ * Reading direction of recipe content, independent of the interface language.
+ * The text itself decides; the stored language tag is only a fallback, since an
+ * imported page can declare a language it is not written in. Undefined means no
+ * signal either way, so the caller should inherit the interface direction.
+ */
+export function textDirection(language: string | null | undefined, ...texts: (string | null | undefined)[]): 'rtl' | 'ltr' | undefined {
+  const sample = texts.filter(Boolean).join(' ')
+  const rtl = sample.match(RTL_LETTERS)?.length ?? 0
+  const ltr = sample.match(LTR_LETTERS)?.length ?? 0
+  if (rtl || ltr) return rtl >= ltr ? 'rtl' : 'ltr'
+  const base = (language ?? '').toLowerCase().split(/[-_]/)[0]
+  if (!base) return undefined
+  return RTL_LANGUAGES.has(base) ? 'rtl' : 'ltr'
+}
+
+const HEBREW_UNITS: Record<string, [one: string, many: string]> = {
+  tsp: ['כפית', 'כפיות'],
+  tbsp: ['כף', 'כפות'],
+  cup: ['כוס', 'כוסות'],
+  g: ['גרם', 'גרם'],
+  kg: ['ק״ג', 'ק״ג'],
+  ml: ['מ״ל', 'מ״ל'],
+  l: ['ליטר', 'ליטר'],
+  pinch: ['קורט', 'קורט'],
+  piece: ['', ''],
+}
+
+/** A canonical unit as the recipe's own language would write it. */
+export function unitLabel(unit: string, amount: number | null, dir?: 'rtl' | 'ltr'): string {
+  if (unit === 'piece') return ''
+  const hebrew = dir === 'rtl' ? HEBREW_UNITS[unit] : undefined
+  if (!hebrew) return unit
+  return amount !== null && amount <= 1 ? hebrew[0] : hebrew[1]
+}
+
+/**
+ * Amount and the rest of an ingredient line. When the amount was neither scaled
+ * nor converted the line is shown as it was written, because the stored unit is
+ * canonical ("tbsp" for "כפות", "piece" for "cloves") and would read wrong.
+ */
+export function ingredientText(
+  i: { food: string; notes: string; raw: string; quantity: string; unit: string; amount: number | null; display_quantity: string; display_unit: string },
+  dir?: 'rtl' | 'ltr',
+): { amount: string; rest: string } {
+  if (!i.food) return { amount: '', rest: i.raw }
+  const unchanged = i.display_quantity === i.quantity && i.display_unit === i.unit
+  const at = unchanged && i.quantity ? i.raw.indexOf(i.food) : -1
+  if (at > 0) return { amount: i.raw.slice(0, at).trim(), rest: i.raw.slice(at).trim() }
+  const amount = [i.display_quantity, unitLabel(i.display_unit, i.amount, dir)].filter(Boolean).join(' ')
+  const rest = [i.food, i.notes ? `(${i.notes})` : ''].filter(Boolean).join(' ')
+  return { amount, rest }
+}
+
+export function recipeDirection(recipe: {
+  language?: string | null
+  name?: string | null
+  ingredients?: { raw?: string | null }[]
+  steps?: { text?: string | null }[]
+}): 'rtl' | 'ltr' | undefined {
+  return textDirection(
+    recipe.language,
+    recipe.name,
+    ...(recipe.ingredients ?? []).slice(0, 5).map((i) => i.raw),
+    ...(recipe.steps ?? []).slice(0, 3).map((s) => s.text),
+  )
+}
+
 /** YYYY-MM-DD in local time (toISOString would shift across midnight). */
 export function toISODate(d: Date): string {
   const y = d.getFullYear()

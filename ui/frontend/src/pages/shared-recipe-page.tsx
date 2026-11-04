@@ -5,6 +5,7 @@ import { useParams } from 'react-router-dom'
 import { ChefHat, ExternalLink, Printer } from 'lucide-react'
 
 import { kitchen } from '@/lib/kitchen'
+import { recipeDirection } from '@/lib/kitchen-format'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Minutes, RecipeImage, errorText } from '@/components/kitchen/bits'
@@ -35,13 +36,14 @@ export function SharedRecipePage() {
     )
   }
 
+  const contentDir = recipeDirection(recipe)
   return (
     <div className="mx-auto max-w-4xl p-4 sm:p-8" lang={recipe.language || undefined}>
       <header className="mb-6 grid gap-4 sm:grid-cols-[1fr_16rem]">
         <div className="grid content-start gap-2">
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><ChefHat className="size-4" />{t('share.sharedWithYou')}</p>
-          <h1 className="text-2xl font-semibold tracking-tight" dir="auto">{recipe.name}</h1>
-          {recipe.description && <p className="text-muted-foreground" dir="auto">{recipe.description}</p>}
+          <h1 className="text-2xl font-semibold tracking-tight" dir={contentDir ?? 'auto'}>{recipe.name}</h1>
+          {recipe.description && <p className="text-muted-foreground" dir={contentDir ?? 'auto'}>{recipe.description}</p>}
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <Minutes value={recipe.total_minutes} />
             {recipe.tags.map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}
@@ -64,6 +66,7 @@ export function SharedRecipePage() {
           <h2 className="mb-2 font-semibold">{t('recipe.ingredients')}</h2>
           <IngredientList
             ingredients={recipe.ingredients}
+            dir={contentDir}
             checked={checked}
             onToggle={(p) => setChecked((s) => {
               const next = new Set(s)
@@ -76,7 +79,7 @@ export function SharedRecipePage() {
         <section className="grid content-start gap-6">
           <div>
             <h2 className="mb-2 font-semibold">{t('recipe.steps')}</h2>
-            <StepList steps={recipe.steps} recipeName={recipe.name} />
+            <StepList steps={recipe.steps} recipeName={recipe.name} dir={contentDir} />
           </div>
           {(recipe.nutrition?.usable ?? 0) > 0 && <NutritionPanel nutrition={recipe.nutrition} servings={recipe.servings} />}
         </section>
