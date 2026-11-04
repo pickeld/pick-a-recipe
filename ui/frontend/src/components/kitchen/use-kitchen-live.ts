@@ -8,7 +8,6 @@ const TOPIC_KEYS: Record<string, string[][]> = {
   collections: [['kitchen', 'collections'], ['kitchen', 'recipes']],
   plan: [['kitchen', 'plan']],
   shopping: [['kitchen', 'shopping']],
-  pantry: [['kitchen', 'pantry']],
   import: [['kitchen', 'import']],
 }
 

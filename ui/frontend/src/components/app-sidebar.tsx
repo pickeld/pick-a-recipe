@@ -2,12 +2,13 @@ import { useQuery } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
-  BookOpen, CalendarDays, ChefHat, Download, History, Home, Languages, ListChecks, LogOut, Moon, Package, Settings,
+  BookOpen, CalendarDays, ChefHat, Download, History, Home, Languages, ListChecks, LogOut, Moon, Settings,
   ShoppingCart, Sparkles, Sun,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { kitchen } from '@/lib/kitchen'
+import { cn } from '@/lib/utils'
 import { useSession } from '@/hooks/use-session'
 import { useSocketEvent } from '@/lib/socket'
 import { LANGUAGES, useDirection } from '@/i18n'
@@ -22,7 +23,6 @@ const KITCHEN_ITEMS = [
   { key: 'souschef', to: '/souschef', icon: Sparkles },
   { key: 'planner', to: '/planner', icon: CalendarDays },
   { key: 'shopping', to: '/shopping', icon: ShoppingCart },
-  { key: 'pantry', to: '/pantry', icon: Package },
   { key: 'import', to: '/import', icon: Download },
   { key: 'cookLog', to: '/cook-log', icon: History },
 ] as const
@@ -54,7 +54,10 @@ export function AppSidebar() {
   const { data: lists } = useQuery({ queryKey: ['kitchen', 'shopping', 'lists'], queryFn: kitchen.shoppingLists })
   const shoppingCount = lists?.lists.reduce((n, l) => n + (l.open_items ?? 0), 0) ?? 0
 
-  const badges: Record<string, number> = { tasks: approvalsCount, shopping: shoppingCount }
+  const { data: library } = useQuery({ queryKey: ['kitchen', 'recipes', 'count'], queryFn: () => kitchen.listRecipes({ limit: 1 }) })
+  const libraryCount = library?.total ?? 0
+
+  const badges: Record<string, number> = { tasks: approvalsCount, shopping: shoppingCount, library: libraryCount }
   const nextLanguage = LANGUAGES.find((l) => l.code !== i18n.language) ?? LANGUAGES[0]
 
   const renderItems = (items: readonly { key: string; to: string; icon: typeof Home }[]) => (
@@ -70,7 +73,7 @@ export function AppSidebar() {
             )}
           </NavLink>
           {badges[item.key] > 0 && (
-            <SidebarMenuBadge className={item.key === 'tasks' ? 'bg-destructive text-white rounded-full px-1.5' : 'rounded-full bg-muted px-1.5'}>
+            <SidebarMenuBadge className={cn('top-1.5 rounded-full px-1.5', item.key === 'tasks' ? 'bg-destructive text-white' : 'bg-foreground/10')}>
               {badges[item.key]}
             </SidebarMenuBadge>
           )}

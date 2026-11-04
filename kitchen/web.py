@@ -143,10 +143,10 @@ def init_app(app: Flask, *, socketio: Any, current_user: Callable[[], str | None
     db.migrate()
 
     from kitchen import (
-        import_api, mealplan_api, pantry_api, public_api, recipes_api, shopping_api, souschef_api,
+        import_api, mealplan_api, public_api, recipes_api, shopping_api, souschef_api,
     )
 
-    for module in (recipes_api, mealplan_api, shopping_api, pantry_api, souschef_api, import_api):
+    for module in (recipes_api, mealplan_api, shopping_api, souschef_api, import_api):
         app.register_blueprint(module.bp, url_prefix="/api/kitchen")
     app.register_blueprint(public_api.bp)
 

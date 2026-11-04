@@ -1,6 +1,6 @@
 /**
  * Typed client for the kitchen API (/api/kitchen/*): library, planner,
- * shopping, pantry, Sous Chef and importers.
+ * shopping, Sous Chef and importers.
  */
 import { ApiError, request } from '@/lib/api'
 
@@ -241,18 +241,6 @@ export interface ShoppingList {
   open_items: number | null
 }
 
-export interface PantryItem {
-  id: number
-  food: string
-  quantity: number | null
-  unit: string
-  staple: boolean
-  expires_on: string | null
-  days_left: number | null
-  note: string
-  updated_at: string
-}
-
 export interface Candidate {
   id: string
   name: string
@@ -280,7 +268,6 @@ export interface SuggestResult {
   reply: string
   ai: boolean
   error?: string
-  expiring?: PantryItem[]
 }
 
 export interface ChatTurn {
@@ -395,8 +382,8 @@ export const kitchen = {
     request<Recipe>(`${K}/recipes/${encodeURIComponent(id)}/nutrition`, { method: 'DELETE' }),
   setMeta: (id: string, meta: Partial<Pick<UserMeta, 'favorite' | 'rating' | 'note'>>) =>
     request<UserMeta>(`${K}/recipes/${encodeURIComponent(id)}/me`, { method: 'PUT', json: meta }),
-  markCooked: (id: string, body: { servings?: number | null; note?: string; deduct_pantry?: boolean; cooked_on?: string }) =>
-    request<{ id: number; deducted: unknown[] }>(`${K}/recipes/${encodeURIComponent(id)}/cooked`, { method: 'POST', json: body }),
+  markCooked: (id: string, body: { servings?: number | null; note?: string; cooked_on?: string }) =>
+    request<{ id: number }>(`${K}/recipes/${encodeURIComponent(id)}/cooked`, { method: 'POST', json: body }),
   cookLog: (recipeId?: string) => request<{ entries: CookEntry[] }>(`${K}/cook-log${qs({ recipe: recipeId })}`),
   deleteCookEntry: (id: number) => request<{ status: string }>(`${K}/cook-log/${id}`, { method: 'DELETE' }),
   stats: (year?: number) => request<CookStats>(`${K}/stats${qs({ year })}`),
@@ -462,33 +449,22 @@ export const kitchen = {
     request<{ results: { id?: number; temp_id?: string; ok: boolean; stale?: boolean; error?: string }[] }>(
       `${K}/shopping/sync`, { method: 'POST', json: { ops } }),
   generateShopping: (body: { list_id?: number; recipe_id?: string; servings?: number | null; only_foods?: string[]; start?: string; end?: string }) =>
-    request<ShoppingPayload & { added: number; excluded: number; recipes?: number }>(`${K}/shopping/generate`, { method: 'POST', json: body }),
+    request<ShoppingPayload & { added: number; recipes?: number }>(`${K}/shopping/generate`, { method: 'POST', json: body }),
   clearShopping: (listId: number, all = false) =>
     request<{ removed: number }>(`${K}/shopping/clear`, { method: 'POST', json: { list_id: listId, all } }),
-  toPantry: (ids: number[]) => request<{ moved: number }>(`${K}/shopping/to-pantry`, { method: 'POST', json: { ids } }),
-
-  // Pantry
-  pantry: (days = 3) => request<{ items: PantryItem[]; expiring: PantryItem[] }>(`${K}/pantry${qs({ days })}`),
-  addPantry: (item: { food: string; quantity?: string | number | null; unit?: string; staple?: boolean; expires_on?: string | null; note?: string }) =>
-    request<{ id: number }>(`${K}/pantry`, { method: 'POST', json: item }),
-  updatePantry: (id: number, patch: Partial<{ food: string; quantity: string | number | null; unit: string; staple: boolean; expires_on: string | null; note: string }>) =>
-    request<{ status: string }>(`${K}/pantry/${id}`, { method: 'PATCH', json: patch }),
-  deletePantry: (id: number) => request<{ status: string }>(`${K}/pantry/${id}`, { method: 'DELETE' }),
 
   // Sous Chef
   diets: () => request<{ diets: string[] }>(`${K}/souschef/diets`),
-  suggest: (body: { ingredients: string[]; use_pantry?: boolean; message?: string; history?: ChatTurn[]; max_minutes?: number | null; diets?: string[]; tags?: string[]; ai?: boolean; lang?: string }) =>
+  suggest: (body: { ingredients: string[]; message?: string; history?: ChatTurn[]; max_minutes?: number | null; diets?: string[]; tags?: string[]; ai?: boolean; lang?: string }) =>
     request<SuggestResult>(`${K}/souschef/suggest`, { method: 'POST', json: body }),
-  invent: (body: { ingredients: string[]; message?: string; use_pantry?: boolean; diets?: string[]; max_minutes?: number | null }) =>
+  invent: (body: { ingredients: string[]; message?: string; diets?: string[]; max_minutes?: number | null }) =>
     request<{ draft: SchemaRecipe }>(`${K}/souschef/invent`, { method: 'POST', json: body }),
   saveDraft: (draft: SchemaRecipe) => request<{ id: string }>(`${K}/souschef/save-draft`, { method: 'POST', json: { draft } }),
   substitute: (food: string, recipeId?: string) =>
     request<{ options: { use: string; amount: string; notes: string }[] }>(`${K}/souschef/substitute`, {
       method: 'POST', json: { food, recipe_id: recipeId },
     }),
-  useItUp: (days = 3, lang?: string) =>
-    request<SuggestResult>(`${K}/souschef/use-it-up`, { method: 'POST', json: { days, lang } }),
-  planWeek: (body: { start: string; end: string; slots: Slot[]; message?: string; use_pantry?: boolean }) =>
+  planWeek: (body: { start: string; end: string; slots: Slot[]; message?: string }) =>
     request<WeekPlanResult>(`${K}/souschef/plan-week`, { method: 'POST', json: body }),
   applyPlan: (assignments: WeekPlanResult['assignments'], servings?: number | null) =>
     request<{ added: number }>(`${K}/souschef/plan-week/apply`, { method: 'POST', json: { assignments, servings } }),

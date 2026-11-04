@@ -2789,7 +2789,7 @@ def _reemit_parked_previews() -> None:
 _reemit_parked_previews()
 
 
-# ===== Kitchen (library, planner, shopping, pantry, Sous Chef) =====
+# ===== Kitchen (library, planner, shopping, Sous Chef) =====
 
 import kitchen.web as kitchen_web  # noqa: E402
 

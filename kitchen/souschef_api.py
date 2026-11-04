@@ -73,7 +73,6 @@ def suggest():
     use_ai = data.get("ai", True) is not False
     kwargs = dict(
         on_hand=_strings(data.get("ingredients")),
-        use_pantry=bool(data.get("use_pantry")),
         message=str(data.get("message") or "")[:1000],
         history=history[-10:],
         max_minutes=_int_or_none(data.get("max_minutes"), 5, 1440),
@@ -93,7 +92,7 @@ def invent():
     with _one_at_a_time() as user:
         draft = souschef.invent(
             username=user, on_hand=_strings(data.get("ingredients")),
-            message=str(data.get("message") or "")[:1000], use_pantry=bool(data.get("use_pantry")),
+            message=str(data.get("message") or "")[:1000],
             diets=_diets(data.get("diets")), max_minutes=_int_or_none(data.get("max_minutes"), 5, 1440),
         )
     return jsonify({"draft": draft})
@@ -122,19 +121,6 @@ def substitute():
     return jsonify({"options": options})
 
 
-@bp.post("/souschef/use-it-up")
-def use_it_up():
-    data = body()
-    days = _int_or_none(data.get("days"), 0, 30)
-    lang = str(data.get("lang") or "")[:10] or None
-    if data.get("ai") is False:
-        return jsonify(souschef.use_it_up(
-            username=current_user(), days=3 if days is None else days, use_ai=False, lang=lang,
-        ))
-    with _one_at_a_time() as user:
-        return jsonify(souschef.use_it_up(username=user, days=3 if days is None else days, lang=lang))
-
-
 @bp.post("/souschef/plan-week")
 def plan_week():
     data = body()
@@ -145,7 +131,7 @@ def plan_week():
     with _one_at_a_time() as user:
         return jsonify(souschef.plan_week(
             username=user, start=start, end=end, slots=slots or ["dinner"],
-            message=str(data.get("message") or "")[:1000], use_pantry=data.get("use_pantry", True) is not False,
+            message=str(data.get("message") or "")[:1000],
         ))
 
 
