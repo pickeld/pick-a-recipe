@@ -1,3 +1,4 @@
+import { textDirection } from '@/lib/kitchen-format'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
@@ -36,12 +37,20 @@ function isHowToStep(inst: Instruction): inst is HowToStep {
 
 interface StepListProps {
   instructions: Instruction[]
+  dir?: 'rtl' | 'ltr'
 }
 
-function StepList({ instructions }: StepListProps) {
+function instructionTexts(instructions: Instruction[] | undefined): string[] {
+  return (instructions ?? []).flatMap((inst) => {
+    if (isHowToSection(inst)) return inst.itemListElement.map((s) => s.text)
+    return [isHowToStep(inst) ? inst.text : inst]
+  })
+}
+
+function StepList({ instructions, dir }: StepListProps) {
   let counter = 0
   return (
-    <ol className="space-y-2">
+    <ol className="space-y-2" dir={dir}>
       {instructions.map((inst, i) => {
         if (isHowToSection(inst)) {
           return (
@@ -49,7 +58,7 @@ function StepList({ instructions }: StepListProps) {
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {inst.name}
               </p>
-              <ol className="space-y-1.5 pl-2">
+              <ol className="space-y-1.5 ps-2">
                 {inst.itemListElement.map((step, j) => {
                   counter++
                   const n = counter
@@ -94,6 +103,13 @@ export function RecipeView({ recipe }: RecipeViewProps) {
   const structuredIngredients = recipe.recipeIngredients ?? []
   const flatIngredients = recipe.recipeIngredient ?? []
   const hasStructured = structuredIngredients.length > 0
+  const contentDir = textDirection(
+    typeof recipe.inLanguage === 'string' ? recipe.inLanguage : '',
+    recipe.name,
+    ...flatIngredients.slice(0, 5),
+    ...structuredIngredients.slice(0, 5).map((i) => i.food),
+    ...instructionTexts(recipe.recipeInstructions).slice(0, 3),
+  )
 
   const categories = toStringArray(recipe.recipeCategory)
   const cuisines = toStringArray(recipe.recipeCuisine)
@@ -115,8 +131,8 @@ export function RecipeView({ recipe }: RecipeViewProps) {
 
   return (
     <ScrollArea className="max-h-[60vh]">
-      <div className="space-y-4 pr-2">
-        <div>
+      <div className="space-y-4 pe-2">
+        <div dir={contentDir}>
           <h2 className="text-lg font-semibold">{recipe.name}</h2>
           {recipe.description && (
             <p className="mt-1 text-sm text-muted-foreground">{recipe.description}</p>
@@ -172,7 +188,7 @@ export function RecipeView({ recipe }: RecipeViewProps) {
           <div>
             <h3 className="mb-2 text-sm font-semibold">Ingredients</h3>
             {hasStructured ? (
-              <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-1 sm:grid-cols-2" dir={contentDir}>
                 {structuredIngredients.map((ing, i) => (
                   <div key={i} className="flex gap-1 text-sm">
                     <span className="font-medium text-foreground">
@@ -186,7 +202,7 @@ export function RecipeView({ recipe }: RecipeViewProps) {
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-1 sm:grid-cols-2" dir={contentDir}>
                 {flatIngredients.map((ing, i) => (
                   <p key={i} className="text-sm">{ing}</p>
                 ))}
@@ -200,7 +216,7 @@ export function RecipeView({ recipe }: RecipeViewProps) {
             <Separator />
             <div>
               <h3 className="mb-2 text-sm font-semibold">Instructions</h3>
-              <StepList instructions={recipe.recipeInstructions} />
+              <StepList instructions={recipe.recipeInstructions} dir={contentDir} />
             </div>
           </>
         )}

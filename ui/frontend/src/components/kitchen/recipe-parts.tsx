@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Minus, Pencil, Plus, RotateCcw } from 'lucide-react'
 
 import { NUTRIENT_KEYS, type Ingredient, type Nutrients, type Nutrition, type Step, type UnitSystem } from '@/lib/kitchen'
-import { stepServings } from '@/lib/kitchen-format'
+import { ingredientText, stepServings } from '@/lib/kitchen-format'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -61,37 +61,31 @@ export function UnitToggle({ value, onChange }: { value: UnitSystem; onChange: (
   )
 }
 
-export function ingredientText(i: Ingredient): { amount: string; rest: string } {
-  const amount = [i.display_quantity, i.display_unit].filter(Boolean).join(' ')
-  const rest = [i.food, i.notes ? `(${i.notes})` : ''].filter(Boolean).join(' ')
-  if (!i.food) return { amount: '', rest: i.raw }
-  return { amount, rest }
-}
-
 export function IngredientList({
-  ingredients, checked, onToggle, highlight, onSubstitute,
+  ingredients, checked, onToggle, highlight, onSubstitute, dir,
 }: {
   ingredients: Ingredient[]
   checked?: Set<number>
   onToggle?: (position: number) => void
   highlight?: number[]
   onSubstitute?: (i: Ingredient) => void
+  dir?: 'rtl' | 'ltr'
 }) {
   const { t } = useTranslation()
   let section = ''
   return (
-    <ul className="grid gap-1">
+    <ul className="grid gap-1" dir={dir}>
       {ingredients.map((i) => {
         const header = i.section && i.section !== section ? i.section : null
         section = i.section
-        const { amount, rest } = ingredientText(i)
+        const { amount, rest } = ingredientText(i, dir)
         const done = checked?.has(i.position)
         return (
           <li key={i.position}>
             {header && <p className="mt-3 mb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{header}</p>}
             <div className={cn('group flex items-start gap-2 rounded-md px-1 py-1', highlight?.includes(i.position) && 'bg-primary/10')}>
               {onToggle && <Checkbox className="mt-0.5" checked={!!done} onChange={() => onToggle(i.position)} label={i.raw} />}
-              <span className={cn('flex-1 leading-snug', done && 'text-muted-foreground line-through')} dir="auto">
+              <span className={cn('flex-1 leading-snug', done && 'text-muted-foreground line-through')} dir={dir ?? 'auto'}>
                 {amount && <span className="font-semibold tabular-nums">{amount} </span>}
                 {rest}
                 {i.optional && <span className="text-xs text-muted-foreground"> · {t('recipe.optional')}</span>}
@@ -113,10 +107,10 @@ export function IngredientList({
   )
 }
 
-export function StepList({ steps, recipeName }: { steps: Step[]; recipeName: string }) {
+export function StepList({ steps, recipeName, dir }: { steps: Step[]; recipeName: string; dir?: 'rtl' | 'ltr' }) {
   let section = ''
   return (
-    <ol className="grid gap-4">
+    <ol className="grid gap-4" dir={dir}>
       {steps.map((s, idx) => {
         const header = s.section && s.section !== section ? s.section : null
         section = s.section
@@ -126,7 +120,7 @@ export function StepList({ steps, recipeName }: { steps: Step[]; recipeName: str
             <div className="flex gap-3">
               <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{idx + 1}</span>
               <div className="flex-1">
-                <p className="leading-relaxed" dir="auto">{s.text}</p>
+                <p className="leading-relaxed" dir={dir ?? 'auto'}>{s.text}</p>
                 {s.timers.length > 0 && (
                   <div className="no-print mt-1.5 flex flex-wrap gap-1.5">
                     {s.timers.map((timer, i) => <TimerChip key={i} timer={timer} recipe={recipeName} />)}

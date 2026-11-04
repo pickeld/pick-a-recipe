@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 
 import { useDirection } from '@/i18n'
 import { kitchen } from '@/lib/kitchen'
+import { recipeDirection } from '@/lib/kitchen-format'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -92,6 +93,7 @@ export function CookModePage() {
   if (error) return <p className="p-6 text-destructive">{errorText(error)}</p>
   if (!recipe) return <div className="flex h-svh items-center justify-center text-muted-foreground">{t('common.loading')}</div>
 
+  const contentDir = recipeDirection(recipe)
   const step = recipe.steps[index]
   const used = step ? recipe.ingredients.filter((i) => step.ingredient_refs.includes(i.position)) : []
   const Prev = dir === 'rtl' ? ChevronRight : ChevronLeft
@@ -125,7 +127,7 @@ export function CookModePage() {
           <Link to={`/library/${recipe.id}`}><X /></Link>
         </Button>
         <div className="min-w-0 flex-1">
-          <p className="truncate font-medium" dir="auto">{recipe.name}</p>
+          <p className="truncate font-medium"><bdi>{recipe.name}</bdi></p>
           <p className="text-xs text-muted-foreground">
             {finished ? t('cook.finished') : t('cook.stepOf', { n: index + 1, total })} · {t('recipe.servingsLabel', { count: recipe.servings ?? 0 })}
           </p>
@@ -151,8 +153,8 @@ export function CookModePage() {
           </div>
         ) : step ? (
           <div className="grid w-full max-w-3xl gap-6">
-            {step.section && <p className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">{step.section}</p>}
-            <p className="text-2xl leading-relaxed md:text-3xl" dir="auto">{step.text}</p>
+            {step.section && <p className="text-sm font-semibold tracking-wide text-muted-foreground uppercase" dir={contentDir ?? 'auto'}>{step.section}</p>}
+            <p className="text-2xl leading-relaxed md:text-3xl" dir={contentDir ?? 'auto'}>{step.text}</p>
             {step.timers.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {step.timers.map((timer, i) => <TimerChip key={i} timer={timer} recipe={recipe.name} className="px-3 py-1.5 text-base" />)}
@@ -161,7 +163,7 @@ export function CookModePage() {
             {used.length > 0 && (
               <div className="rounded-xl border bg-muted/30 p-4">
                 <p className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t('cook.forThisStep')}</p>
-                <IngredientList ingredients={used} />
+                <IngredientList ingredients={used} dir={contentDir} />
               </div>
             )}
           </div>
@@ -191,6 +193,7 @@ export function CookModePage() {
           <div className="px-4 pb-6">
             <IngredientList
               ingredients={recipe.ingredients}
+              dir={contentDir}
               checked={checked}
               highlight={step?.ingredient_refs}
               onToggle={(p) => setChecked((s) => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n })}
