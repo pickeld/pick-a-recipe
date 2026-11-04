@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Clock, ImageOff, Star, X } from 'lucide-react'
+import { ChefHat, Clock, ImageOff, Star, X } from 'lucide-react'
 
 import { splitMinutes } from '@/lib/kitchen-format'
 import { cn } from '@/lib/utils'
@@ -60,15 +60,36 @@ export function Rating({
   )
 }
 
-export function RecipeImage({ src, alt, className }: { src: string | null | undefined; alt: string; className?: string }) {
-  if (!src) {
+const PLACEHOLDER_TONES = [
+  'from-amber-100 to-orange-200 text-orange-700/60 dark:from-amber-950 dark:to-orange-900 dark:text-orange-300/50',
+  'from-emerald-100 to-teal-200 text-teal-700/60 dark:from-emerald-950 dark:to-teal-900 dark:text-teal-300/50',
+  'from-rose-100 to-pink-200 text-rose-700/60 dark:from-rose-950 dark:to-pink-900 dark:text-rose-300/50',
+  'from-sky-100 to-indigo-200 text-indigo-700/60 dark:from-sky-950 dark:to-indigo-900 dark:text-indigo-300/50',
+  'from-yellow-100 to-amber-200 text-amber-700/60 dark:from-yellow-950 dark:to-amber-900 dark:text-amber-300/50',
+  'from-violet-100 to-purple-200 text-purple-700/60 dark:from-violet-950 dark:to-purple-900 dark:text-purple-300/50',
+]
+
+function toneFor(seed: string): string {
+  let h = 0x811c9dc5
+  for (const ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193)
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b)
+  h ^= h >>> 16
+  return PLACEHOLDER_TONES[(h >>> 0) % PLACEHOLDER_TONES.length]
+}
+
+export function RecipeImage({
+  src, alt, className, seed,
+}: { src: string | null | undefined; alt: string; className?: string; seed?: string }) {
+  const [brokenSrc, setBrokenSrc] = useState<string | null>(null)
+  if (!src || brokenSrc === src) {
+    const key = seed ?? alt
     return (
-      <div className={cn('flex items-center justify-center bg-muted text-muted-foreground', className)}>
-        <ImageOff className="size-6 opacity-50" />
+      <div className={cn('flex items-center justify-center', key ? cn('bg-gradient-to-br', toneFor(key)) : 'bg-muted text-muted-foreground', className)}>
+        {key ? <ChefHat className="size-1/4 max-h-16 max-w-16 min-h-6 min-w-6" strokeWidth={1.5} /> : <ImageOff className="size-6 opacity-50" />}
       </div>
     )
   }
-  return <img src={src} alt={alt} loading="lazy" className={cn('object-cover', className)} />
+  return <img src={src} alt={alt} loading="lazy" onError={() => setBrokenSrc(src)} className={cn('object-cover', className)} />
 }
 
 export function Checkbox({

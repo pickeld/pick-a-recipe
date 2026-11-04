@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  ArrowLeft, CalendarPlus, CheckCircle2, ChefHat, Copy, Download, ExternalLink, FolderPlus, Heart, ImagePlus,
-  Link2, Link2Off, ListPlus, Loader2, MoreHorizontal, Pencil, Printer, Sparkles, Star, Tags, Trash2, Wand2,
+  ArrowLeft, CalendarPlus, CheckCircle2, ChefHat, Clock, Copy, Download, ExternalLink, Flame, FolderPlus, Heart, ImagePlus,
+  Link2, Link2Off, ListPlus, Loader2, MoreHorizontal, Pencil, Printer, Sparkles, Star, Tags, Timer, Trash2, Users, Wand2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -27,7 +27,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { Minutes, Rating, RecipeImage, errorText, useMinutesLabel } from '@/components/kitchen/bits'
+import { Rating, RecipeImage, errorText, useMinutesLabel } from '@/components/kitchen/bits'
 import { AddToPlanDialog } from '@/components/kitchen/plan-dialog'
 import { RecipeEditor, valuesFromRecipe, valuesToPatch } from '@/components/kitchen/recipe-editor'
 import { IngredientList, NutritionPanel, ServingsStepper, StepList, UnitToggle } from '@/components/kitchen/recipe-parts'
@@ -134,6 +134,25 @@ function CookedDialog({ recipe, servings, open, onClose }: { recipe: Recipe; ser
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+const TILE_TONES = {
+  sky: 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300',
+  violet: 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300',
+  emerald: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
+  orange: 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300',
+} as const
+
+function StatTile({ icon, label, value, tone }: { icon: ReactNode; label: string; value: string; tone: keyof typeof TILE_TONES }) {
+  return (
+    <div className="flex items-center gap-2.5 rounded-xl border bg-card p-2.5">
+      <span className={cn('grid size-9 shrink-0 place-items-center rounded-lg [&_svg]:size-4.5', TILE_TONES[tone])}>{icon}</span>
+      <div className="min-w-0">
+        <p className="truncate text-xs text-muted-foreground">{label}</p>
+        <p className="truncate font-semibold tabular-nums">{value}</p>
+      </div>
+    </div>
   )
 }
 
@@ -339,7 +358,7 @@ export function RecipePage() {
 
       <div className="grid gap-6 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <div className="grid content-start gap-2">
-          <RecipeImage src={image} alt={recipe.name} className="aspect-[4/3] w-full rounded-xl" />
+          <RecipeImage src={image} alt={recipe.name} seed={recipe.name} className="aspect-[4/3] w-full rounded-2xl shadow-md ring-1 ring-black/5 dark:ring-white/10" />
           {recipe.images.length > 1 && (
             <div className="no-print flex gap-2 overflow-x-auto">
               {recipe.images.map((img, i) => (
@@ -365,7 +384,7 @@ export function RecipePage() {
 
         <div className="grid content-start gap-3">
           <div className="flex items-start justify-between gap-3">
-            <h2 className="text-2xl font-semibold tracking-tight" dir="auto">{recipe.name}</h2>
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl" dir="auto">{recipe.name}</h2>
             <Button
               variant="ghost"
               size="icon"
@@ -378,9 +397,15 @@ export function RecipePage() {
             </Button>
           </div>
           {recipe.description && <p className="text-muted-foreground" dir="auto">{recipe.description}</p>}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {recipe.total_minutes ? <StatTile icon={<Clock />} tone="sky" label={t('recipe.totalTime')} value={minutesLabel(recipe.total_minutes)} /> : null}
+            {isoToMinutes(recipe.prep_time) ? <StatTile icon={<Timer />} tone="violet" label={t('recipe.prep')} value={minutesLabel(isoToMinutes(recipe.prep_time))} /> : null}
+            <StatTile icon={<Users />} tone="emerald" label={t('recipe.servings')} value={String(target)} />
+            {recipe.nutrition?.per_serving.calories ? (
+              <StatTile icon={<Flame />} tone="orange" label={t('nutrition.perServing')} value={t('library.kcal', { value: Math.round(recipe.nutrition.per_serving.calories) })} />
+            ) : null}
+          </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-            <Minutes value={recipe.total_minutes} />
-            {isoToMinutes(recipe.prep_time) && <span className="text-muted-foreground">{t('recipe.prep')}: {minutesLabel(isoToMinutes(recipe.prep_time))}</span>}
             <div className="no-print"><Rating value={recipe.user.rating} onChange={(v) => meta.mutate({ rating: v })} /></div>
             {recipe.user.cook_count > 0 && (
               <span className="text-muted-foreground">{t('recipe.cookedTimes', { count: recipe.user.cook_count, date: recipe.user.last_cooked })}</span>
@@ -393,7 +418,7 @@ export function RecipePage() {
           </div>
           {recipe.tags.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
-              {recipe.tags.map((tag) => <Badge key={tag} variant="secondary">{tag}</Badge>)}
+              {recipe.tags.map((tag) => <Badge key={tag} variant="secondary" className="rounded-full px-2.5">{tag}</Badge>)}
             </div>
           )}
           <Textarea

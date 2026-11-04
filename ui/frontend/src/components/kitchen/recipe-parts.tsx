@@ -151,6 +151,42 @@ function round(v: number | undefined) {
   return v >= 10 ? String(Math.round(v)) : String(Math.round(v * 10) / 10)
 }
 
+const MACROS = [
+  { key: 'proteinContent', kcalPerGram: 4, color: 'bg-emerald-500' },
+  { key: 'carbohydrateContent', kcalPerGram: 4, color: 'bg-amber-400' },
+  { key: 'fatContent', kcalPerGram: 9, color: 'bg-rose-400' },
+] as const
+
+function hasSplit(values: Nutrients): boolean {
+  return MACROS.some((m) => (values[m.key] ?? 0) > 0)
+}
+
+function MacroSplit({ values }: { values: Nutrients }) {
+  const { t } = useTranslation()
+  const parts = MACROS.map((m) => ({ ...m, grams: values[m.key] ?? 0, kcal: (values[m.key] ?? 0) * m.kcalPerGram }))
+  const sum = parts.reduce((s, p) => s + p.kcal, 0)
+  if (!hasSplit(values)) return null
+  return (
+    <div className="grid gap-2">
+      <div className="flex h-2.5 overflow-hidden rounded-full bg-muted" role="img" aria-label={parts.map((p) => `${t(`nutrition.keys.${p.key}`)} ${Math.round((p.kcal / sum) * 100)}%`).join(', ')}>
+        {parts.map((p) => p.kcal > 0 && <div key={p.key} className={p.color} style={{ width: `${(p.kcal / sum) * 100}%` }} />)}
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {parts.map((p) => (
+          <div key={p.key} className="flex items-start gap-1.5">
+            <span className={cn('mt-1.5 size-2 shrink-0 rounded-full', p.color)} />
+            <div className="min-w-0">
+              <p className="text-xs text-muted-foreground">{t(`nutrition.keys.${p.key}`)}</p>
+              <p className="font-semibold tabular-nums">{round(p.grams)} <span className="text-xs font-normal text-muted-foreground">g</span></p>
+              <p className="text-[11px] text-muted-foreground">{t('nutrition.ofCalories', { pct: Math.round((p.kcal / sum) * 100) })}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function NutritionPanel({
   nutrition, servings, onSave, onReset,
 }: {
@@ -190,8 +226,9 @@ export function NutritionPanel({
       </div>
       {nutrition ? (
         <>
+          <MacroSplit values={values} />
           <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm sm:grid-cols-4">
-            {NUTRIENT_KEYS.map((k) => (
+            {NUTRIENT_KEYS.filter((k) => !(hasSplit(values) && MACROS.some((m) => m.key === k))).map((k) => (
               <div key={k} className={cn('flex flex-col', k === 'calories' && 'col-span-2 sm:col-span-1')}>
                 <dt className="text-xs text-muted-foreground">{t(`nutrition.keys.${k}`)}</dt>
                 <dd className={cn('tabular-nums', k === 'calories' && 'text-lg font-semibold')}>
