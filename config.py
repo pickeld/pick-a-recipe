@@ -72,6 +72,14 @@ def migrate_legacy_database() -> bool:
 
 migrate_legacy_database()
 
+# Vocabulary the Mealie optimizer is allowed to tag recipes with. Editable in
+# Settings; the optimizer never writes a tag that is not on this list.
+DEFAULT_TAG_TAXONOMY = (
+    "dairy, dessert, meat, fish, poultry, vegetarian, vegan, gluten-free, "
+    "italian, asian, mexican, middle-eastern, breakfast, soup, salad, "
+    "baking, grill, quick"
+)
+
 # Default configuration values
 DEFAULT_CONFIG = {
     # JSON array of AI provider records; see ai_providers.py. Empty on an
@@ -115,6 +123,8 @@ DEFAULT_CONFIG = {
     "vapid_public_key": "",
     "vapid_private_key": "",
     "vapid_subject": "",
+    "mealie_tag_taxonomy": DEFAULT_TAG_TAXONOMY,
+    "mealie_similarity_threshold": "0.72",
 }
 
 
@@ -360,6 +370,26 @@ class Config:
             return max(1, min(16, int(raw)))
         except (TypeError, ValueError):
             return 3
+
+    @property
+    def MEALIE_TAG_TAXONOMY(self) -> list[str]:
+        """Allowed optimizer tags, parsed from the comma/newline separated setting."""
+        raw = self._get('mealie_tag_taxonomy', DEFAULT_CONFIG['mealie_tag_taxonomy'])
+        seen: dict[str, str] = {}
+        for chunk in raw.replace('\n', ',').split(','):
+            tag = chunk.strip()
+            if tag and tag.lower() not in seen:
+                seen[tag.lower()] = tag
+        return list(seen.values())
+
+    @property
+    def MEALIE_SIMILARITY_THRESHOLD(self) -> float:
+        raw = self._get('mealie_similarity_threshold',
+                        DEFAULT_CONFIG['mealie_similarity_threshold'])
+        try:
+            return max(0.3, min(0.99, float(raw)))
+        except (TypeError, ValueError):
+            return 0.72
 
     def reload(self):
         """Reload configuration from database."""

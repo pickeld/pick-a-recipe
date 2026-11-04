@@ -5,12 +5,22 @@ This module provides functionality to export recipes to Mealie.
 """
 
 import os
+from urllib.parse import urlsplit
+
 from config import config
 
 from recipe_exporter import RecipeExporter
 from helpers import coerce_num, extract_servings, setup_logger
 
 logger = setup_logger(__name__)
+
+# One page of /api/recipes. Mealie accepts perPage=-1 for "everything", but the
+# library scan walks pages so a slow server does not hold one request open.
+RECIPES_PAGE_SIZE = 100
+
+
+class MealieNotConfigured(RuntimeError):
+    """Mealie host/API key are missing or unusable."""
 
 
 class Mealie(RecipeExporter):
@@ -26,6 +36,208 @@ class Mealie(RecipeExporter):
     def _get_image_upload_url(self, recipe_id: str | int) -> str:
         """Get the URL for image upload endpoint."""
         return f"{self.base_url}/api/recipes/{recipe_id}/image"
+
+    # ===== Library access =====
+    #
+    # Everything below reads or rewrites recipes that already live in Mealie,
+    # which the upload-only export path never needed. Used by the optimizer.
+
+    def require_configured(self) -> None:
+        """Fail fast when Mealie cannot be reached with the stored settings.
+
+        The host comes from admin-only Settings, never from a request body, and
+        is restricted to http/https so it cannot be pointed at file:// or
+        another scheme by a bad config value.
+        """
+        if not self.base_url:
+            raise MealieNotConfigured("Mealie URL is not set in Settings.")
+        if not self.api_key:
+            raise MealieNotConfigured("Mealie API key is not set in Settings.")
+        parts = urlsplit(self.base_url)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            raise MealieNotConfigured(
+                f"Mealie URL must be an http(s) address, got '{self.base_url}'."
+            )
+
+    def probe(self) -> dict:
+        """Check connectivity and credentials without pulling the library."""
+        try:
+            self.require_configured()
+        except MealieNotConfigured as exc:
+            return {"ok": False, "error": str(exc)}
+
+        try:
+            resp = self._session.get(
+                f"{self.base_url}/api/recipes",
+                params={"page": 1, "perPage": 1},
+                headers=self._build_headers(),
+                timeout=15,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"Could not reach Mealie: {exc}"}
+
+        if resp.status_code in (401, 403):
+            return {"ok": False, "error": "Mealie rejected the API key."}
+        if resp.status_code >= 400:
+            return {"ok": False, "error": f"Mealie returned HTTP {resp.status_code}."}
+
+        total = 0
+        try:
+            total = int(resp.json().get("total") or 0)
+        except Exception:
+            pass
+        return {"ok": True, "total": total}
+
+    def list_recipes(self, page: int = 1, per_page: int = RECIPES_PAGE_SIZE) -> dict:
+        """One page of recipe summaries: {items, page, total, total_pages}."""
+        self.require_configured()
+        resp = self._session.get(
+            f"{self.base_url}/api/recipes",
+            params={"page": page, "perPage": per_page},
+            headers=self._build_headers(),
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return {"items": data, "page": page, "total": len(data), "total_pages": 1}
+        return {
+            "items": data.get("items") or [],
+            "page": data.get("page") or page,
+            "total": int(data.get("total") or 0),
+            "total_pages": int(data.get("total_pages") or 1),
+        }
+
+    def iter_all_recipes(self, *, per_page: int = RECIPES_PAGE_SIZE,
+                         max_recipes: int | None = None):
+        """Yield every recipe summary, walking pagination."""
+        page = 1
+        seen = 0
+        while True:
+            batch = self.list_recipes(page=page, per_page=per_page)
+            items = batch["items"]
+            if not items:
+                return
+            for item in items:
+                yield item
+                seen += 1
+                if max_recipes is not None and seen >= max_recipes:
+                    return
+            if page >= batch["total_pages"]:
+                return
+            page += 1
+
+    def get_recipe(self, slug: str) -> dict | None:
+        """Full recipe detail. List responses are summaries without steps."""
+        self.require_configured()
+        resp = self._session.get(
+            f"{self.base_url}/api/recipes/{slug}",
+            headers=self._build_headers(),
+            timeout=30,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else None
+
+    def delete_recipe(self, slug: str) -> bool:
+        """Permanently remove a recipe from Mealie."""
+        self.require_configured()
+        resp = self._session.delete(
+            f"{self.base_url}/api/recipes/{slug}",
+            headers=self._build_headers(),
+            timeout=30,
+        )
+        if resp.status_code in (200, 204):
+            logger.info(f"[Mealie] Deleted recipe '{slug}'")
+            return True
+        if resp.status_code == 404:
+            return False
+        logger.error(
+            f"[Mealie] Delete of '{slug}' failed: HTTP {resp.status_code} "
+            f"{resp.text[:300]}"
+        )
+        resp.raise_for_status()
+        return False
+
+    def get_all_tags(self) -> dict[str, dict]:
+        """Every organizer tag, keyed by lowercase name."""
+        self.require_configured()
+        resp = self._session.get(
+            f"{self.base_url}/api/organizers/tags",
+            params={"page": 1, "perPage": -1},
+            headers=self._build_headers(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        items = data.get("items", []) if isinstance(data, dict) else data
+        return {t["name"].lower(): t for t in items if isinstance(t, dict) and t.get("name")}
+
+    def get_or_create_tag(self, name: str, tags: dict[str, dict] | None = None) -> dict | None:
+        """Resolve a tag by name, creating it only when nothing matches.
+
+        Mirrors _get_or_create_unit/_get_or_create_food: pass the cache in so a
+        batch of recipes does not re-list tags (or create duplicates) per call.
+        """
+        name = (name or "").strip()
+        if not name:
+            return None
+        if tags is None:
+            tags = self.get_all_tags()
+        existing = tags.get(name.lower())
+        if existing:
+            return existing
+
+        resp = self._session.post(
+            f"{self.base_url}/api/organizers/tags",
+            json={"name": name},
+            headers=self._build_headers(),
+            timeout=30,
+        )
+        if resp.status_code not in (200, 201):
+            logger.warning(
+                f"[Mealie] Failed to create tag '{name}': HTTP {resp.status_code}"
+            )
+            return None
+        created = resp.json()
+        if not isinstance(created, dict):
+            return None
+        tags[name.lower()] = created
+        return created
+
+    def update_recipe(self, slug: str, fields: dict) -> dict:
+        """Merge fields into the stored recipe and PUT the whole object back.
+
+        Mealie's PUT wants a complete recipe, and its PATCH is unreliable (see
+        create_recipe), so read-modify-write is the only safe shape here.
+        """
+        self.require_configured()
+        current = self.get_recipe(slug)
+        if current is None:
+            raise ValueError(f"Recipe '{slug}' no longer exists in Mealie.")
+
+        payload = current.copy()
+        payload.update(fields)
+
+        resp = self._session.put(
+            f"{self.base_url}/api/recipes/{slug}",
+            json=payload,
+            headers=self._build_headers(),
+            timeout=60,
+        )
+        if resp.status_code >= 400:
+            logger.error(
+                f"[Mealie] Update of '{slug}' failed: HTTP {resp.status_code} "
+                f"{resp.text[:300]}"
+            )
+            resp.raise_for_status()
+        try:
+            result = resp.json()
+        except Exception:
+            return {"slug": slug}
+        return result if isinstance(result, dict) else {"slug": slug}
 
     def _get_all_units(self, headers: dict) -> dict[str, dict]:
         """Fetch all units from Mealie and return a dict keyed by lowercase name."""

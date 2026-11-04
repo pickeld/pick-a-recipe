@@ -11,9 +11,9 @@ import json
 import re
 import unicodedata
 from collections import Counter
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
 # ISO-8601 durations that actually show up on recipes (PT15M, PT1H30M, P1DT2H).
 _ISO8601_DURATION = re.compile(
@@ -163,6 +163,60 @@ class FrameSelection(BaseModel):
     index: int
 
 
+# ===== Mealie library optimization =====
+
+
+class DuplicateVerdict(BaseModel):
+    """Whether a heuristically-clustered pair really is the same dish."""
+
+    model_config = ConfigDict(extra="forbid")
+    same_dish: bool
+    confidence: float
+    reason: str
+
+
+class TagSuggestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tag: str
+    reason: str
+
+
+class RecipeTagSuggestion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tags: list[TagSuggestion]
+
+
+RECIPE_ISSUE_KINDS = (
+    "ingredient_not_used",
+    "ingredient_missing",
+    "step_missing",
+    "step_out_of_order",
+    "quantity_missing",
+)
+
+
+class RecipeIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal[RECIPE_ISSUE_KINDS]  # type: ignore[valid-type]
+    detail: str
+    target: str
+    suggestion: str
+
+
+class RecipeAudit(BaseModel):
+    """Flow/completeness critique plus the corrected recipe body.
+
+    Both halves are needed: ``issues`` drives the per-issue accept checkboxes in
+    review, ``corrected_*`` gives the before/after the reviewer actually reads.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    summary: str
+    issues: list[RecipeIssue]
+    corrected_ingredients: list[str]
+    corrected_steps: list[str]
+
+
 def extract_json(text: str) -> str:
     """Strip markdown fences so a JSON object remains."""
     if not text:
@@ -248,6 +302,33 @@ RECIPE_JSON_SCHEMA = to_openai_json_schema(RecipeExtraction)
 NUTRITION_JSON_SCHEMA = to_openai_json_schema(YieldNutritionEstimate)
 VISUAL_JSON_SCHEMA = to_openai_json_schema(VisualTextExtraction)
 FRAME_JSON_SCHEMA = to_openai_json_schema(FrameSelection)
+DUPLICATE_JSON_SCHEMA = to_openai_json_schema(DuplicateVerdict)
+AUDIT_JSON_SCHEMA = to_openai_json_schema(RecipeAudit)
+
+
+def build_tag_suggestion_model(allowed_tags: list[str]) -> type[BaseModel]:
+    """Tag-suggestion model whose ``tag`` field is an enum of the taxonomy.
+
+    The taxonomy is user-editable in Settings, so the model has to be built per
+    call rather than declared. Callers must still filter the response against
+    the taxonomy: the enum constrains well-behaved providers, the filter is
+    what actually guarantees no invented tag reaches Mealie.
+    """
+    if not allowed_tags:
+        return RecipeTagSuggestion
+
+    tag_field = Literal[tuple(allowed_tags)]  # type: ignore[valid-type]
+    item = create_model(
+        "ConstrainedTagSuggestion",
+        __config__=ConfigDict(extra="forbid"),
+        tag=(tag_field, ...),
+        reason=(str, ...),
+    )
+    return create_model(
+        "ConstrainedRecipeTagSuggestion",
+        __config__=ConfigDict(extra="forbid"),
+        tags=(list[item], ...),  # type: ignore[valid-type]
+    )
 
 
 def parse_model(text: str, model: type[BaseModel]) -> BaseModel:
@@ -278,6 +359,39 @@ def parse_visual_text(text: str) -> VisualTextExtraction:
     extraction = parse_model(text, VisualTextExtraction)
     assert isinstance(extraction, VisualTextExtraction)
     return extraction
+
+
+def parse_duplicate_verdict(text: str) -> DuplicateVerdict:
+    verdict = parse_model(text, DuplicateVerdict)
+    assert isinstance(verdict, DuplicateVerdict)
+    return verdict
+
+
+def parse_tag_suggestion(text: str, allowed_tags: list[str]) -> list[TagSuggestion]:
+    """Validate tag suggestions and drop anything outside the taxonomy.
+
+    Returned in taxonomy order with duplicates collapsed, so the review UI does
+    not depend on whatever order the model emitted.
+    """
+    data = parse_model(text, RecipeTagSuggestion)
+    assert isinstance(data, RecipeTagSuggestion)
+
+    allowed = {t.lower(): t for t in allowed_tags}
+    order = {t.lower(): i for i, t in enumerate(allowed_tags)}
+    kept: dict[str, TagSuggestion] = {}
+    for suggestion in data.tags:
+        key = suggestion.tag.strip().lower()
+        canonical = allowed.get(key)
+        if canonical is None or key in kept:
+            continue
+        kept[key] = TagSuggestion(tag=canonical, reason=suggestion.reason)
+    return [kept[k] for k in sorted(kept, key=lambda k: order[k])]
+
+
+def parse_recipe_audit(text: str) -> RecipeAudit:
+    audit = parse_model(text, RecipeAudit)
+    assert isinstance(audit, RecipeAudit)
+    return audit
 
 
 def parse_frame_selection(text: str, max_idx: int) -> int | None:

@@ -196,6 +196,61 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             used_at TIMESTAMP
         )
     ''')
+
+    # Mealie library optimization: one row per scan, many findings per scan.
+    # Findings are proposals only - nothing reaches Mealie until a reviewer
+    # applies one, and `snapshot` keeps the pre-apply state recoverable.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mealie_scans (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'running',
+            checks TEXT NOT NULL,
+            progress INTEGER DEFAULT 0,
+            stage_message TEXT,
+            recipes_scanned INTEGER DEFAULT 0,
+            recipes_total INTEGER DEFAULT 0,
+            findings_count INTEGER DEFAULT 0,
+            error_message TEXT,
+            user_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mealie_findings (
+            id TEXT PRIMARY KEY,
+            scan_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'info',
+            recipe_slug TEXT,
+            recipe_name TEXT,
+            title TEXT NOT NULL,
+            detail TEXT,
+            proposal TEXT NOT NULL,
+            snapshot TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error_message TEXT,
+            applied_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (scan_id) REFERENCES mealie_scans(id)
+        )
+    ''')
+    cursor.execute(
+        'CREATE INDEX IF NOT EXISTS idx_mealie_findings_status '
+        'ON mealie_findings(status, kind)'
+    )
+    cursor.execute(
+        'CREATE INDEX IF NOT EXISTS idx_mealie_findings_scan '
+        'ON mealie_findings(scan_id)'
+    )
+
+    # A crash or restart leaves a scan marked running forever, which would
+    # block every future scan on the "one at a time" check.
+    cursor.execute(
+        "UPDATE mealie_scans SET status = 'failed', "
+        "error_message = 'Interrupted by a restart', "
+        "updated_at = CURRENT_TIMESTAMP WHERE status = 'running'"
+    )
     # Nonces are marked used rather than deleted so a replayed state can be
     # told apart from one that was never issued.
     try:
@@ -1583,6 +1638,191 @@ def mobile_nonce_exists(nonce: str) -> bool:
         cursor = conn.cursor()
         cursor.execute('SELECT 1 FROM mobile_auth_nonces WHERE nonce = ?', (nonce,))
         return cursor.fetchone() is not None
+
+
+# ===== Mealie Optimization Functions =====
+
+MEALIE_FINDING_STATUSES = ('pending', 'applied', 'dismissed', 'failed')
+
+
+def _decode_finding(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    for key in ('proposal', 'snapshot'):
+        if item.get(key):
+            try:
+                item[key] = json.loads(item[key])
+            except json.JSONDecodeError:
+                item[key] = None
+    return item
+
+
+def create_mealie_scan(scan_id: str, checks: List[str],
+                       user_id: Optional[str] = None) -> bool:
+    """Record the start of a library scan."""
+    with get_db() as conn:
+        conn.execute(
+            'INSERT INTO mealie_scans (id, status, checks, user_id) '
+            "VALUES (?, 'running', ?, ?)",
+            (scan_id, json.dumps(checks), user_id),
+        )
+        conn.commit()
+        return True
+
+
+def update_mealie_scan(scan_id: str, **fields: Any) -> bool:
+    """Patch mutable scan columns (progress, status, counts, error)."""
+    allowed = {
+        'status', 'progress', 'stage_message', 'recipes_scanned',
+        'recipes_total', 'findings_count', 'error_message',
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return False
+    assignments = ', '.join(f'{k} = ?' for k in updates)
+    with get_db() as conn:
+        conn.execute(
+            f'UPDATE mealie_scans SET {assignments}, updated_at = CURRENT_TIMESTAMP '
+            'WHERE id = ?',
+            list(updates.values()) + [scan_id],
+        )
+        conn.commit()
+        return True
+
+
+def _decode_scan(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    if row is None:
+        return None
+    item = dict(row)
+    try:
+        item['checks'] = json.loads(item.get('checks') or '[]')
+    except json.JSONDecodeError:
+        item['checks'] = []
+    return item
+
+
+def get_mealie_scan(scan_id: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM mealie_scans WHERE id = ?', (scan_id,))
+        return _decode_scan(cursor.fetchone())
+
+
+def get_latest_mealie_scan() -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT * FROM mealie_scans ORDER BY created_at DESC, rowid DESC LIMIT 1'
+        )
+        return _decode_scan(cursor.fetchone())
+
+
+def get_running_mealie_scan() -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM mealie_scans WHERE status = 'running' "
+            'ORDER BY created_at DESC LIMIT 1'
+        )
+        return _decode_scan(cursor.fetchone())
+
+
+def clear_pending_mealie_findings() -> int:
+    """Drop un-reviewed findings so a new scan does not stack stale proposals.
+
+    Applied and dismissed rows stay: they are the audit trail of what was done
+    to the library, and the snapshots on them are the only undo material.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM mealie_findings WHERE status = 'pending'")
+        conn.commit()
+        return cursor.rowcount
+
+
+def save_mealie_findings(scan_id: str, findings: List[Dict[str, Any]]) -> int:
+    """Persist a batch of findings for review."""
+    if not findings:
+        return 0
+    rows = [
+        (
+            f['id'], scan_id, f['kind'], f.get('severity') or 'info',
+            f.get('recipe_slug'), f.get('recipe_name'), f['title'],
+            f.get('detail') or '', json.dumps(f.get('proposal') or {}),
+            json.dumps(f['snapshot']) if f.get('snapshot') is not None else None,
+        )
+        for f in findings
+    ]
+    with get_db() as conn:
+        conn.executemany(
+            '''INSERT INTO mealie_findings
+               (id, scan_id, kind, severity, recipe_slug, recipe_name,
+                title, detail, proposal, snapshot)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            rows,
+        )
+        conn.commit()
+        return len(rows)
+
+
+def get_mealie_finding(finding_id: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM mealie_findings WHERE id = ?', (finding_id,))
+        row = cursor.fetchone()
+        return _decode_finding(row) if row else None
+
+
+def list_mealie_findings(*, kind: Optional[str] = None,
+                         status: Optional[str] = 'pending',
+                         limit: int = 200,
+                         offset: int = 0) -> List[Dict[str, Any]]:
+    clauses, params = [], []
+    if kind:
+        clauses.append('kind = ?')
+        params.append(kind)
+    if status:
+        clauses.append('status = ?')
+        params.append(status)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ''
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f'SELECT * FROM mealie_findings{where} '
+            'ORDER BY CASE severity WHEN \'error\' THEN 0 WHEN \'warning\' THEN 1 '
+            "ELSE 2 END, kind, created_at LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        )
+        return [_decode_finding(row) for row in cursor.fetchall()]
+
+
+def count_mealie_findings(status: str = 'pending') -> Dict[str, int]:
+    """Findings per kind for the given status, plus a 'total'."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT kind, COUNT(*) AS n FROM mealie_findings '
+            'WHERE status = ? GROUP BY kind',
+            (status,),
+        )
+        counts = {row['kind']: row['n'] for row in cursor.fetchall()}
+        counts['total'] = sum(counts.values())
+        return counts
+
+
+def set_mealie_finding_status(finding_id: str, status: str,
+                              error_message: Optional[str] = None) -> bool:
+    if status not in MEALIE_FINDING_STATUSES:
+        return False
+    applied_at = 'CURRENT_TIMESTAMP' if status == 'applied' else 'applied_at'
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f'UPDATE mealie_findings SET status = ?, error_message = ?, '
+            f'applied_at = {applied_at} WHERE id = ?',
+            (status, error_message, finding_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 # Initialize database on module import

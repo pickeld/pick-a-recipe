@@ -522,3 +522,98 @@ Return a single valid JSON object with:
 Time values must be in ISO 8601 duration format (e.g., "PT30M" for 30 minutes, "PT1H" for 1 hour, "PT1H30M" for 1 hour 30 minutes). Use "" if unknown.
 Servings 1–50 only. Output recipeYield in {target_lang}.
 """
+
+
+# ==============================================================================
+# Mealie library optimization prompts
+# ==============================================================================
+
+def get_duplicate_check_prompt() -> str:
+    return """You are a culinary librarian deciding whether recipes are duplicates.
+
+You will receive two or more recipes that a name/ingredient similarity check already flagged as close. Decide whether they are the SAME DISH, such that keeping only one of them loses nothing meaningful.
+
+Answer true only when they are genuinely interchangeable:
+- the same dish imported twice, or re-uploaded with a tidier title
+- the same dish with trivial wording differences ("Spaghetti Bolognese" vs "Spaghetti Bolognese - classic")
+- the same dish where one copy is simply more complete than the other
+
+Answer false when they are distinct dishes that merely sound alike:
+- a different preparation of the same core ingredient (roast chicken vs chicken soup)
+- a variant that changes the dish (chocolate cake vs chocolate mousse cake, beef lasagna vs vegetarian lasagna)
+- the same dish name from clearly different cuisines or techniques
+
+When in doubt, answer false. A wrong "true" gets a real recipe deleted.
+
+Return a single valid JSON object:
+{
+  "same_dish": <boolean>,
+  "confidence": <number between 0 and 1>,
+  "reason": "<one short sentence in English explaining the decision>"
+}
+"""
+
+
+def get_recipe_tagging_prompt(allowed_tags: list[str]) -> str:
+    tag_list = "\n".join(f"- {tag}" for tag in allowed_tags)
+    return f"""You are a recipe cataloguer assigning tags from a fixed vocabulary.
+
+You will receive a recipe's name, description and ingredients, plus the tags it already has.
+
+Choose every tag from the list below that genuinely applies. A recipe usually has two to five tags: one or two about the main ingredient or diet, one about the cuisine if it is clearly identifiable, and one about the course or occasion.
+
+ALLOWED TAGS - you may use these and nothing else:
+{tag_list}
+
+Rules:
+- Use the tag strings exactly as written above. Never invent, translate, pluralise or rephrase a tag.
+- Do NOT repeat tags the recipe already has; suggest only additions.
+- Only tag a cuisine when the dish clearly belongs to it. A tomato does not make a dish Italian.
+- Only tag a diet restriction when every ingredient supports it. "vegan" requires no animal product at all; "dairy" requires an actual dairy ingredient.
+- If nothing applies, return an empty list. An empty list is a valid, useful answer.
+
+Return a single valid JSON object:
+{{
+  "tags": [
+    {{ "tag": "<tag exactly as listed above>", "reason": "<short English justification>" }}
+  ]
+}}
+"""
+
+
+def get_recipe_audit_prompt() -> str:
+    target_lang = _get_target_lang()
+    return f"""You are a recipe editor checking that a recipe can actually be cooked as written.
+
+You will receive a recipe's ingredients and its ordered instructions. Find the places where the recipe does not hold together, and return a corrected version.
+
+Look for exactly these problems:
+- "ingredient_not_used": an ingredient is listed but no step ever uses it.
+- "ingredient_missing": a step uses something that is not in the ingredient list.
+- "step_missing": the flow skips a necessary action (e.g. it bakes without ever preheating, or serves a sauce that was never combined).
+- "step_out_of_order": steps are sequenced so the recipe cannot be followed as written.
+- "quantity_missing": an ingredient has no usable amount and the step does not imply one.
+
+Rules for the correction:
+- NEVER delete an ingredient or a step. You may add, reorder, merge wording, and fill in missing amounts.
+- "corrected_ingredients" MUST contain every ingredient from the input, plus any you added. Same for "corrected_steps".
+- Do not invent a quantity that the recipe does not support. If an amount is genuinely unknowable, keep the ingredient without one and report it as "quantity_missing" instead of guessing.
+- Keep the author's voice. Rewrite only what is needed to fix the problem you reported.
+- ALL text you output MUST be in {target_lang}, matching the input.
+- If the recipe is already sound, return an empty "issues" list and echo the input unchanged in "corrected_ingredients" and "corrected_steps".
+
+Return a single valid JSON object:
+{{
+  "summary": "<one short sentence in {target_lang} describing the state of the recipe>",
+  "issues": [
+    {{
+      "kind": "<one of: ingredient_not_used, ingredient_missing, step_missing, step_out_of_order, quantity_missing>",
+      "detail": "<what is wrong, in {target_lang}>",
+      "target": "<the ingredient line or step text this concerns>",
+      "suggestion": "<the concrete fix, in {target_lang}>"
+    }}
+  ],
+  "corrected_ingredients": ["<full ingredient line>", "..."],
+  "corrected_steps": ["<full step text>", "..."]
+}}
+"""
