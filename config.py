@@ -101,8 +101,11 @@ DEFAULT_CONFIG = {
     "tandoor_api_key": "",
     "tandoor_host": "",
     "target_language": "he",
+    # The built-in library is the default destination. Mealie and Tandoor are
+    # optional extras; an install that already stored tandoor_enabled keeps it.
+    "library_enabled": "true",
     "mealie_enabled": "false",
-    "tandoor_enabled": "true",
+    "tandoor_enabled": "false",
     "whisper_model": "small",
     "confirm_before_upload": "true",
     "hf_token": "",
@@ -297,6 +300,10 @@ class Config:
     @property
     def TARGET_LANGUAGE(self) -> str:
         return self._get('target_language', DEFAULT_CONFIG['target_language'])
+
+    @property
+    def LIBRARY_ENABLED(self) -> bool:
+        return _truthy(self._get('library_enabled', DEFAULT_CONFIG['library_enabled']))
 
     @property
     def MEALIE_ENABLED(self) -> bool:

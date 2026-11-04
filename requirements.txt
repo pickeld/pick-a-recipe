@@ -17,3 +17,6 @@ beautifulsoup4
 # Web Push for job-outcome notifications. Brings py-vapid and cryptography,
 # which ui/push.py also uses to mint the VAPID key pair.
 pywebpush
+# Recipe library: re-encodes every stored image, and reads text from imported PDFs.
+Pillow
+pypdf
