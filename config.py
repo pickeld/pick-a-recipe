@@ -41,15 +41,36 @@ def _db_activity_score(db_path: str) -> int:
     return score
 
 
+def _has_tables(db_path: str) -> bool:
+    try:
+        conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+        try:
+            return conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
+            ).fetchone() is not None
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
 def migrate_legacy_database() -> bool:
-    """Copy the richest legacy SQLite file into the canonical pick-a-recipe.db.
+    """Seed the canonical pick-a-recipe.db from the richest legacy SQLite file.
 
     srv2 kept volume social_recipe_social-recipes across renames; the old stack
     wrote pick_a_recipe.db while the new app expects pick-a-recipe.db.
+
+    Only ever seeds a canonical file that is missing or empty. This runs at
+    import, so every process start (and every one-off script) passes through
+    it: comparing row counts against a live database meant that pruning rows
+    on boot let the stale legacy copy win, and the next import overwrote
+    months of data with it.
     """
-    canonical_score = _db_activity_score(DB_FILE)
+    if os.path.exists(DB_FILE) and _has_tables(DB_FILE):
+        return False
+
     best_legacy = None
-    best_score = canonical_score
+    best_score = 0
 
     for name in LEGACY_DB_FILES:
         path = os.path.join(DATA_DIR, name)

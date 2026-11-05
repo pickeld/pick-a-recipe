@@ -155,6 +155,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         cursor.execute('ALTER TABLE users ADD COLUMN password_hash TEXT')
     except sqlite3.OperationalError:
         pass
+    _rebuild_legacy_users_table(conn)
 
     job_columns = {
         'retry_from_history_id': 'INTEGER',
@@ -218,6 +219,76 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         )
     ''')
 
+    conn.commit()
+
+
+_USERS_COLUMNS = (
+    'id', 'username', 'oidc_sub', 'email', 'name', 'avatar_url',
+    'is_admin', 'password_hash', 'created_at',
+)
+
+
+def _rebuild_legacy_users_table(conn: sqlite3.Connection) -> None:
+    """Bring a users table from the pre-roles app up to the current shape.
+
+    That table had (id, username, password_hash NOT NULL, created_at,
+    oidc_email, display_name): no is_admin, no oidc_sub, and a NOT NULL
+    password that SSO and admin-created rows cannot satisfy. ALTER TABLE can
+    neither drop that constraint nor add a UNIQUE column, so the table is
+    rebuilt. Rows keep their id and username, which is what job and upload
+    ownership refers to.
+
+    Every account of that era had full access, so they carry over as admins.
+    Its password hashes were unsalted digests rather than Argon2id; those are
+    dropped instead of kept, leaving the account without a password until an
+    admin or first-run setup gives it one.
+    """
+    info = conn.execute('PRAGMA table_info(users)').fetchall()
+    columns = {row[1]: row for row in info}
+    password_not_null = bool(columns.get('password_hash', (0, 0, 0, 0))[3])
+    if set(_USERS_COLUMNS) <= set(columns) and not password_not_null:
+        return
+
+    def pick(*names: str, default: str = 'NULL') -> str:
+        for name in names:
+            if name in columns:
+                return name
+        return default
+
+    is_admin = pick('is_admin', default='1')
+    email = pick('email', 'oidc_email')
+    name = pick('name', 'display_name')
+    created_at = pick('created_at', default='CURRENT_TIMESTAMP')
+    password = (
+        "CASE WHEN password_hash LIKE '$argon2%' THEN password_hash END"
+        if 'password_hash' in columns else 'NULL'
+    )
+
+    cursor = conn.cursor()
+    cursor.execute('DROP TABLE IF EXISTS users_rebuild')
+    cursor.execute('''
+        CREATE TABLE users_rebuild (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            oidc_sub TEXT UNIQUE,
+            email TEXT,
+            name TEXT,
+            avatar_url TEXT,
+            is_admin INTEGER DEFAULT 0,
+            password_hash TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute(f'''
+        INSERT INTO users_rebuild
+            (id, username, oidc_sub, email, name, avatar_url,
+             is_admin, password_hash, created_at)
+        SELECT id, username, {pick('oidc_sub')}, {email}, {name},
+               {pick('avatar_url')}, {is_admin}, {password}, {created_at}
+        FROM users
+    ''')
+    cursor.execute('DROP TABLE users')
+    cursor.execute('ALTER TABLE users_rebuild RENAME TO users')
     conn.commit()
 
 
