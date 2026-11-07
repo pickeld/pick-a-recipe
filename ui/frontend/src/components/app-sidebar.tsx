@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   BookOpen, CalendarDays, ChefHat, Download, History, Home, Languages, ListChecks, LogOut, Moon, Settings,
-  ShoppingCart, Sparkles, Sun,
+  ShoppingCart, Sun,
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
@@ -20,7 +20,6 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 
 const KITCHEN_ITEMS = [
   { key: 'library', to: '/library', icon: BookOpen },
-  { key: 'souschef', to: '/souschef', icon: Sparkles },
   { key: 'planner', to: '/planner', icon: CalendarDays },
   { key: 'shopping', to: '/shopping', icon: ShoppingCart },
   { key: 'import', to: '/import', icon: Download },

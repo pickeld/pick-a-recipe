@@ -7,6 +7,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { AppSidebar } from '@/components/app-sidebar'
 import { RecipePreviewHost } from '@/components/recipe-preview-host'
 import { TimerTray } from '@/components/kitchen/timers'
+import { SousChefBubble } from '@/components/souschef/souschef-bubble'
 import { useKitchenLive } from '@/components/kitchen/use-kitchen-live'
 import { Separator } from '@/components/ui/separator'
 import { useSocketEvent } from '@/lib/socket'
@@ -19,7 +20,6 @@ const TITLES: Record<string, string> = {
   '/library': 'nav.library',
   '/planner': 'nav.planner',
   '/shopping': 'nav.shopping',
-  '/souschef': 'nav.souschef',
   '/import': 'nav.import',
   '/cook-log': 'nav.cookLog',
 }
@@ -59,6 +59,7 @@ export function AppShell() {
       <KitchenLive />
       <RecipePreviewHost />
       <TimerTray />
+      <SousChefBubble />
       <AppSidebar />
       <SidebarInset>
         <header className="no-print flex h-14 shrink-0 items-center gap-2 border-b px-4">

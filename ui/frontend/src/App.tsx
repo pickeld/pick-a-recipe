@@ -17,7 +17,6 @@ const RecipePage = lazy(() => import('@/pages/recipe-page').then((m) => ({ defau
 const CookModePage = lazy(() => import('@/pages/cook-mode-page').then((m) => ({ default: m.CookModePage })))
 const PlannerPage = lazy(() => import('@/pages/planner-page').then((m) => ({ default: m.PlannerPage })))
 const ShoppingPage = lazy(() => import('@/pages/shopping-page').then((m) => ({ default: m.ShoppingPage })))
-const SousChefPage = lazy(() => import('@/pages/souschef-page').then((m) => ({ default: m.SousChefPage })))
 const ImportPage = lazy(() => import('@/pages/import-page').then((m) => ({ default: m.ImportPage })))
 const CookLogPage = lazy(() => import('@/pages/cook-log-page').then((m) => ({ default: m.CookLogPage })))
 const SharedRecipePage = lazy(() => import('@/pages/shared-recipe-page').then((m) => ({ default: m.SharedRecipePage })))
@@ -55,7 +54,6 @@ export default function App() {
               <Route path="/library/:recipeId" element={<RecipePage />} />
               <Route path="/planner" element={<PlannerPage />} />
               <Route path="/shopping" element={<ShoppingPage />} />
-              <Route path="/souschef" element={<SousChefPage />} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/cook-log" element={<CookLogPage />} />
             </Route>
