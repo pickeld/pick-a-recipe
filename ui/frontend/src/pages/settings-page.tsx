@@ -365,11 +365,11 @@ export function SettingsPage() {
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Field
             label="Recipe Language"
-            hint="Language the final recipe is written in."
+            hint="Language the final recipe is written in. Leave empty to keep each recipe in its own language."
           >
             <Input
               type="text"
-              placeholder="hebrew"
+              placeholder="Original language"
               value={get('recipe_lang')}
               onChange={e => set('recipe_lang', e.target.value)}
             />
@@ -378,13 +378,13 @@ export function SettingsPage() {
             label="Transcription Code"
             hint={
               <>
-                Two-letter code matching the recipe language (e.g. <code className="font-mono text-xs">he</code>, <code className="font-mono text-xs">en</code>).
+                Two-letter code to translate recipes into (e.g. <code className="font-mono text-xs">he</code>, <code className="font-mono text-xs">en</code>). Leave empty to keep the original language and detect speech automatically.
               </>
             }
           >
             <Input
               type="text"
-              placeholder="he"
+              placeholder="auto"
               value={get('target_language')}
               onChange={e => set('target_language', e.target.value)}
             />

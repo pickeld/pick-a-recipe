@@ -160,11 +160,11 @@ export function RecipeEditor({
           </DialogHeader>
           <div className="grid gap-1.5">
             <Label htmlFor="ed-name">{t('editor.name')}</Label>
-            <Input id="ed-name" value={values.name} onChange={(e) => set('name', e.target.value)} autoFocus />
+            <Input id="ed-name" dir="auto" value={values.name} onChange={(e) => set('name', e.target.value)} autoFocus />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="ed-desc">{t('editor.description')}</Label>
-            <Textarea id="ed-desc" rows={2} value={values.description} onChange={(e) => set('description', e.target.value)} />
+            <Textarea id="ed-desc" dir="auto" rows={2} value={values.description} onChange={(e) => set('description', e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="grid gap-1.5">
@@ -184,11 +184,11 @@ export function RecipeEditor({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="ed-ing">{t('editor.ingredients')}</Label>
-            <Textarea id="ed-ing" rows={8} value={values.ingredients} onChange={(e) => set('ingredients', e.target.value)} placeholder={t('editor.ingredientsHint')} />
+            <Textarea id="ed-ing" dir="auto" rows={8} value={values.ingredients} onChange={(e) => set('ingredients', e.target.value)} placeholder={t('editor.ingredientsHint')} />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="ed-steps">{t('editor.steps')}</Label>
-            <Textarea id="ed-steps" rows={8} value={values.steps} onChange={(e) => set('steps', e.target.value)} placeholder={t('editor.stepsHint')} />
+            <Textarea id="ed-steps" dir="auto" rows={8} value={values.steps} onChange={(e) => set('steps', e.target.value)} placeholder={t('editor.stepsHint')} />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="ed-url">{t('editor.source')}</Label>

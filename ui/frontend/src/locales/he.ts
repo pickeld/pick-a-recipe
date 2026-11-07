@@ -24,6 +24,10 @@ const he = {
     logout: 'התנתקות',
     admin: 'מנהל',
   },
+  languages: {
+    he: 'עברית',
+    en: 'English',
+  },
   common: {
     save: 'שמירה',
     saved: 'נשמר',

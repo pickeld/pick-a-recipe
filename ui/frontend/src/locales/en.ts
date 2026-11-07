@@ -24,6 +24,10 @@ const en = {
     logout: 'Log out',
     admin: 'admin',
   },
+  languages: {
+    he: 'Hebrew',
+    en: 'English',
+  },
   common: {
     save: 'Save',
     saved: 'Saved',
