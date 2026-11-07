@@ -3,6 +3,7 @@ import { initReactI18next, useTranslation } from 'react-i18next'
 
 import en from '@/locales/en'
 import he from '@/locales/he'
+import { pickLanguage } from '@/lib/language'
 
 export const LANGUAGES = [
   { code: 'he', label: 'עברית', dir: 'rtl' },
@@ -13,13 +14,13 @@ export type Language = (typeof LANGUAGES)[number]['code']
 const STORAGE_KEY = 'lang'
 
 function initialLanguage(): Language {
+  let stored: string | null = null
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored === 'he' || stored === 'en') return stored
+    stored = localStorage.getItem(STORAGE_KEY)
   } catch {
-    // Private mode: fall through to the default.
+    // Private mode: fall through to the browser language.
   }
-  return 'he'
+  return pickLanguage(stored, navigator.languages ?? [navigator.language])
 }
 
 export function dirFor(lang: string): 'rtl' | 'ltr' {

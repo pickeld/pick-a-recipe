@@ -126,10 +126,10 @@ export function AppSidebar() {
               size="sm"
               onClick={() => void i18n.changeLanguage(nextLanguage.code)}
               aria-label={t('nav.language')}
-              lang={nextLanguage.code}
+              title={nextLanguage.label}
             >
               <Languages className="size-4" />
-              {nextLanguage.label}
+              {t(`languages.${nextLanguage.code}`)}
             </Button>
             <Separator orientation="vertical" className="h-5" />
             <a href="/logout" aria-label={t('nav.logout')}>
