@@ -375,7 +375,7 @@ class Chef:
             return recipe
 
         payload = {
-            "language_hint": config.RECIPE_LANG,
+            "language_hint": config.RECIPE_LANG or "same language as the instructions",
             "ingredients": recipe.get("recipeIngredient", []),
             "instructions": [
                 (step.get("text") if isinstance(step, dict) else str(step))

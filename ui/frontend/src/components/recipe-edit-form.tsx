@@ -130,6 +130,7 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
           <Label htmlFor="recipe-name">Name</Label>
           <Input
             id="recipe-name"
+            dir="auto"
             value={name}
             onChange={(e) =>
               push(e.target.value, description, recipeYield, ingredients, steps)
@@ -141,6 +142,7 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
           <Label htmlFor="recipe-description">Description</Label>
           <Textarea
             id="recipe-description"
+            dir="auto"
             value={description}
             rows={2}
             onChange={(e) =>
@@ -153,6 +155,7 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
           <Label htmlFor="recipe-yield">Yield</Label>
           <Input
             id="recipe-yield"
+            dir="auto"
             value={recipeYield}
             onChange={(e) =>
               push(name, description, e.target.value, ingredients, steps)
@@ -194,6 +197,7 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
                 <Input
                   className="col-span-2"
                   placeholder="Unit"
+                  dir="auto"
                   value={ing.unit}
                   onChange={(e) => {
                     const next = ingredients.map((row, idx) =>
@@ -205,6 +209,7 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
                 <Input
                   className="col-span-4"
                   placeholder="Food"
+                  dir="auto"
                   value={ing.food}
                   onChange={(e) => {
                     const next = ingredients.map((row, idx) =>
@@ -216,6 +221,7 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
                 <Input
                   className="col-span-2"
                   placeholder="Notes"
+                  dir="auto"
                   value={ing.notes}
                   onChange={(e) => {
                     const next = ingredients.map((row, idx) =>
@@ -274,6 +280,7 @@ export function RecipeEditForm({ recipe, onChange }: RecipeEditFormProps) {
                 </span>
                 <Textarea
                   className="min-h-16 flex-1"
+                  dir="auto"
                   value={step}
                   rows={2}
                   onChange={(e) => {

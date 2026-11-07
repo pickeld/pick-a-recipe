@@ -388,16 +388,31 @@ _LANG_NAMES = {
 }
 
 
+SOURCE_LANGUAGE = "the source recipe's language"
+
+
 def _get_target_lang() -> str:
-    return _LANG_NAMES.get(config.TARGET_LANGUAGE, config.TARGET_LANGUAGE)
+    """Language name the recipe is written in; empty means keep the source language."""
+    code = (config.TARGET_LANGUAGE or "").strip()
+    return _LANG_NAMES.get(code, code)
+
+
+def _language_rule(target_lang: str) -> str:
+    if target_lang:
+        return (f"ALL text content MUST be in {target_lang}. "
+                f"Translate any content that is not already in {target_lang}.")
+    return ("Keep ALL text content in the language the source recipe is written in. "
+            "Do NOT translate it.")
 
 
 def get_recipe_system_prompt() -> str:
     target_lang = _get_target_lang()
+    language_rule = _language_rule(target_lang)
+    target_lang = target_lang or SOURCE_LANGUAGE
     return f"""You are a culinary data normalizer.
 Return a single valid JSON object.
 MUST be strictly valid JSON (no comments, no trailing commas).
-ALL text content MUST be in {target_lang}. Translate any content that is not already in {target_lang}.
+{language_rule}
 
 If the input is not a recipe (no dish, no ingredients, no cooking steps — e.g. a vlog, ad, music video, or unrelated clip), set "is_recipe" to false, put a short reason in "rejection_reason", and leave the recipe fields empty. Do NOT invent a recipe.
 
@@ -442,6 +457,8 @@ General rules:
 
 def get_web_recipe_system_prompt() -> str:
     target_lang = _get_target_lang()
+    language_rule = _language_rule(target_lang)
+    target_lang = target_lang or SOURCE_LANGUAGE
     return f"""You are a culinary data normalizer.
 You will receive either:
   (a) a Schema.org Recipe JSON object already extracted from the page, or
@@ -449,7 +466,7 @@ You will receive either:
 
 Return a single valid JSON object.
 MUST be strictly valid JSON (no comments, no trailing commas).
-ALL text content MUST be in {target_lang}. Translate any content that is not already in {target_lang}.
+{language_rule}
 
 If the input is not a recipe (no dish, no ingredients, no cooking steps — e.g. a homepage, blog post, or shop page), set "is_recipe" to false, put a short reason in "rejection_reason", and leave the recipe fields empty. Do NOT invent a recipe.
 
@@ -493,7 +510,7 @@ General rules:
 
 
 def get_yield_nutrition_prompt() -> str:
-    target_lang = _get_target_lang()
+    target_lang = _get_target_lang() or SOURCE_LANGUAGE
     return f"""You are a culinary timing assistant.
 Given a recipe's ingredients and instructions, estimate:
 - servings (number of portions; if unclear, infer a reasonable integer based on ingredient amounts)

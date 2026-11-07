@@ -114,7 +114,7 @@ def run_extraction_pipeline(
             return PipelineResult(error="cancelled")
 
         transcriber = Transcriber(video_path)
-        lang = config.TARGET_LANGUAGE
+        lang = config.TARGET_LANGUAGE or "source"
         # Off means ignore audio entirely, including a transcription left over
         # from an earlier run. Writing an empty cache here would also stick:
         # turning speech to text back on would keep reusing that empty file.

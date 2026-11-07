@@ -232,7 +232,7 @@ class Transcriber:
     def _transcribe_locally(self, audio_path: str, lang: str) -> str:
         """faster-whisper on this machine, which needs no API and no network."""
         self._load_model()
-        segments, _info = self.model.transcribe(audio_path, language=lang)
+        segments, _info = self.model.transcribe(audio_path, language=lang or None)
         return " ".join(seg.text.strip() for seg in segments).strip()
 
     def extract_visual_text(self) -> str:
@@ -330,8 +330,13 @@ class Transcriber:
             "ar": "Arabic",
             "ru": "Russian",
         }
-        target_lang = lang_names.get(
-            config.TARGET_LANGUAGE, config.TARGET_LANGUAGE)
+        code = (config.TARGET_LANGUAGE or "").strip()
+        target_lang = lang_names.get(code, code)
+        language_rule = (
+            f"Output the text in {target_lang} language. If the original text is in a different language, translate it to {target_lang}."
+            if target_lang
+            else "Keep the text in the language it appears in. Do not translate it."
+        )
 
         return f"""Analyze this video/images and extract ALL text that appears on screen.
 This includes:
@@ -348,7 +353,7 @@ Return a JSON object with:
 - "instructions_text": cooking steps (empty if none)
 - "other_text": any remaining on-screen text
 If text appears multiple times, include it once.
-Output the text in {target_lang} language. If the original text is in a different language, translate it to {target_lang}."""
+{language_rule}"""
 
 
 def _plain_visual_text(raw: str) -> str:

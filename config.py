@@ -116,12 +116,13 @@ DEFAULT_CONFIG = {
     "gemini_model": "gemini-3.6-flash",
     "openrouter_api_key": "",
     "openrouter_model": "openai/gpt-4o-mini",
-    "recipe_lang": "hebrew",
+    # Empty keeps each recipe in the language it was written in.
+    "recipe_lang": "",
     "mealie_api_key": "",
     "mealie_host": "",
     "tandoor_api_key": "",
     "tandoor_host": "",
-    "target_language": "he",
+    "target_language": "",
     # The built-in library is the default destination. Mealie and Tandoor are
     # optional extras; an install that already stored tandoor_enabled keeps it.
     "library_enabled": "true",
