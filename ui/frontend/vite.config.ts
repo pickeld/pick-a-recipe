@@ -11,7 +11,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      injectRegister: false,
       includeAssets: ['favicon.svg', 'icons/*.png'],
       manifest: {
         id: 'pick-a-recipe-pwa',
@@ -63,6 +63,8 @@ export default defineConfig({
         // Adds the push / notificationclick listeners to the generated worker.
         // Kept as an import so everything below stays stock Workbox output.
         importScripts: ['/push-sw.js'],
+        clientsClaim: true,
+        skipWaiting: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         navigateFallbackDenylist: [
           /^\/api\//,
