@@ -335,7 +335,6 @@ export interface AppConfig {
   hf_token: string
   nutrition_lookup_enabled: string
   yt_dlp_cookies_file: string
-  yt_dlp_cookies_browser: string
   max_concurrent_jobs: string
   [key: string]: string
 }

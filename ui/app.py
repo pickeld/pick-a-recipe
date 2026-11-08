@@ -1358,7 +1358,6 @@ def settings():
             'whisper_model',
             'hf_token',
             'yt_dlp_cookies_file',
-            'yt_dlp_cookies_browser',
             'max_concurrent_jobs',
         ):
             if key in request.form:

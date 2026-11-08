@@ -269,22 +269,6 @@
             <p class="section-description">Configure authentication when downloads fail. YouTube may show bot-check errors; Instagram may block anonymous requests or require login for private reels.</p>
             
             <div class="form-group">
-                <label for="yt_dlp_cookies_browser">Extract Cookies from Browser</label>
-                <select id="yt_dlp_cookies_browser" name="yt_dlp_cookies_browser" class="form-select">
-                    <option value="" {% if not config.yt_dlp_cookies_browser %}selected{% endif %}>None (disabled)</option>
-                    <option value="chrome" {% if config.yt_dlp_cookies_browser == 'chrome' %}selected{% endif %}>Chrome</option>
-                    <option value="firefox" {% if config.yt_dlp_cookies_browser == 'firefox' %}selected{% endif %}>Firefox</option>
-                    <option value="safari" {% if config.yt_dlp_cookies_browser == 'safari' %}selected{% endif %}>Safari</option>
-                    <option value="edge" {% if config.yt_dlp_cookies_browser == 'edge' %}selected{% endif %}>Edge</option>
-                    <option value="opera" {% if config.yt_dlp_cookies_browser == 'opera' %}selected{% endif %}>Opera</option>
-                    <option value="brave" {% if config.yt_dlp_cookies_browser == 'brave' %}selected{% endif %}>Brave</option>
-                    <option value="vivaldi" {% if config.yt_dlp_cookies_browser == 'vivaldi' %}selected{% endif %}>Vivaldi</option>
-                    <option value="chromium" {% if config.yt_dlp_cookies_browser == 'chromium' %}selected{% endif %}>Chromium</option>
-                </select>
-                <small class="form-hint">Automatically extract cookies from a browser installed on the server. The browser must be logged into the video site. <strong>Note:</strong> This only works if Pick-a-Recipe runs on the same machine as your browser (not in Docker).</small>
-            </div>
-            
-            <div class="form-group">
                 <label>Upload Cookies File</label>
                 <div class="cookies-upload-container">
                     <label for="cookies-file-upload" class="btn btn-secondary">

@@ -139,7 +139,6 @@ DEFAULT_CONFIG = {
     "hf_token": "",
     "nutrition_lookup_enabled": "true",
     "yt_dlp_cookies_file": "",
-    "yt_dlp_cookies_browser": "",
     "max_concurrent_jobs": "3",
     # Web Push signing pair. Never edited in Settings and never committed:
     # ui/push.py generates one on first use, or reads it from the environment.
@@ -378,10 +377,6 @@ class Config:
     @property
     def YT_DLP_COOKIES_FILE(self) -> str:
         return self._get('yt_dlp_cookies_file', DEFAULT_CONFIG['yt_dlp_cookies_file'])
-
-    @property
-    def YT_DLP_COOKIES_BROWSER(self) -> str:
-        return self._get('yt_dlp_cookies_browser', DEFAULT_CONFIG['yt_dlp_cookies_browser'])
 
     @property
     def VAPID_PUBLIC_KEY(self) -> str:

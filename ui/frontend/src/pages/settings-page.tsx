@@ -30,13 +30,6 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -467,31 +460,6 @@ export function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <Field
-            label="Extract Cookies from Browser"
-            hint="Automatically extract cookies from a browser installed on the server. Only works if Pick-a-Recipe runs on the same machine as your browser (not in Docker)."
-          >
-            <Select
-              value={get('yt_dlp_cookies_browser') || ''}
-              onValueChange={v => set('yt_dlp_cookies_browser', v)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="None (disabled)" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">None (disabled)</SelectItem>
-                <SelectItem value="chrome">Chrome</SelectItem>
-                <SelectItem value="firefox">Firefox</SelectItem>
-                <SelectItem value="safari">Safari</SelectItem>
-                <SelectItem value="edge">Edge</SelectItem>
-                <SelectItem value="opera">Opera</SelectItem>
-                <SelectItem value="brave">Brave</SelectItem>
-                <SelectItem value="vivaldi">Vivaldi</SelectItem>
-                <SelectItem value="chromium">Chromium</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-
           <div className="flex flex-col gap-1.5">
             <Label>Upload Cookies File</Label>
             <div className="flex items-center gap-3 flex-wrap">

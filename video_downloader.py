@@ -131,26 +131,18 @@ class VideoDownloader:
     def _get_cookie_options(self):
         """Get yt-dlp cookie options from configuration.
 
-        Returns a dict with cookie options if configured, empty dict otherwise.
-        Supports two modes:
-        1. cookies_file: Path to a Netscape-format cookies.txt file
-        2. cookies_browser: Browser name to extract cookies from (e.g., 'chrome', 'firefox')
+        Returns a dict with the uploaded Netscape-format cookies.txt file if
+        one is configured, empty dict otherwise.
         """
         from config import config
         config.reload()  # Ensure we have latest config
 
         cookie_opts = {}
 
-        # Priority: cookies file > cookies from browser
         cookies_file = config.YT_DLP_COOKIES_FILE
-        cookies_browser = config.YT_DLP_COOKIES_BROWSER
-
         if cookies_file and os.path.exists(cookies_file):
             cookie_opts['cookiefile'] = cookies_file
             logger.debug(f"Using cookies file: {cookies_file}")
-        elif cookies_browser:
-            cookie_opts['cookiesfrombrowser'] = (cookies_browser,)
-            logger.debug(f"Using cookies from browser: {cookies_browser}")
 
         return cookie_opts
 
