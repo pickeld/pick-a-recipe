@@ -4,6 +4,7 @@ import { PlusIcon, SearchIcon, ServerIcon, Trash2Icon } from 'lucide-react'
 
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { hostOf, useCatalogFor } from '@/components/settings/use-catalog-for'
 import type { AiProvider, ApiTypeSpec, CatalogModel } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -28,14 +29,6 @@ function slugify(name: string): string {
   )
 }
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.toLowerCase()
-  } catch {
-    return ''
-  }
-}
-
 function usd(value: number | null): string {
   if (value === null) return '?'
   if (value === 0) return 'free'
@@ -48,26 +41,42 @@ function contextSize(tokens: number | null): string {
 }
 
 function priceLine(model: CatalogModel): string {
+  if (model.unit === 'minute') return model.input_cost === 0 ? 'Free' : `${usd(model.input_cost)} / min`
   if (model.input_cost === 0 && model.output_cost === 0) return 'Free'
   return `${usd(model.input_cost)} in · ${usd(model.output_cost)} out`
 }
 
+function priceSummary(model: CatalogModel): string {
+  const unit = model.unit === 'minute' ? 'of audio' : 'per million tokens'
+  const context = model.context ? ` · ${contextSize(model.context)} context` : ''
+  return `${model.id}: ${priceLine(model)} ${unit}${context}.`
+}
+
 // Unknown prices sort last, so "cheapest" never opens on a model nobody can price.
+// Per-minute and per-token prices are not comparable; they only share a list
+// for transcription, where the server already puts per-minute ones first.
 const blendedCost = (m: CatalogModel) =>
-  m.input_cost === null || m.output_cost === null ? Infinity : m.input_cost + m.output_cost
+  m.input_cost === null ? Infinity : m.input_cost + (m.output_cost ?? 0)
 
 /**
  * Model names are always free text. The list only saves people from having to
  * look an id and its price up, so a gateway no catalog has heard of still works.
  */
-function ModelField({
+export function ModelField({
   catalog,
+  task = 'chat',
+  label = 'Model',
   value,
+  defaultModel = '',
   onChange,
   placeholder,
 }: {
   catalog: string
+  task?: 'chat' | 'transcription'
+  label?: string
   value: string
+  /** What runs when the field is left empty, so its price can still be shown. */
+  defaultModel?: string
   onChange: (value: string) => void
   placeholder: string
 }) {
@@ -76,14 +85,14 @@ function ModelField({
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<'newest' | 'cheapest'>('newest')
   const { data, isLoading } = useQuery({
-    queryKey: ['modelCatalog', catalog],
-    queryFn: () => api.modelCatalog(catalog),
+    queryKey: ['modelCatalog', catalog, task],
+    queryFn: () => api.modelCatalog(catalog, task),
     enabled: Boolean(catalog),
     staleTime: 6 * 60 * 60 * 1000,
     retry: false,
   })
   const models = useMemo(() => data?.models ?? [], [data])
-  const selected = models.find(m => m.id === value)
+  const selected = models.find(m => m.id === (value || defaultModel))
 
   const shown = useMemo(() => {
     const needle = search.trim().toLowerCase()
@@ -96,7 +105,7 @@ function ModelField({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={listId}>Model</Label>
+        <Label htmlFor={listId}>{label}</Label>
         {models.length > 0 && (
           <button
             type="button"
@@ -178,22 +187,61 @@ function ModelField({
       )}
       <p className="text-xs text-muted-foreground">
         {selected
-          ? `${priceLine(selected)} per million tokens${selected.context ? ` · ${contextSize(selected.context)} context` : ''}.`
+          ? priceSummary(selected)
           : isLoading
             ? 'Loading models…'
-            : `Any model name works.${models.length ? ' Prices are USD per million tokens.' : ''}`}
+            : `Any model name works.${models.length ? ' Prices are in USD.' : ''}`}
       </p>
     </div>
   )
 }
 
-const OPENROUTER_PRESET: AiProvider = {
-  id: 'openrouter',
-  name: 'OpenRouter',
-  api_type: 'openai-compatible',
-  api_key: '',
-  base_url: 'https://openrouter.ai/api/v1',
-  model: '',
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1'
+
+interface Kind {
+  value: string
+  label: string
+  api_type: string
+  /** Fixed endpoint for a known gateway, so its base URL never has to be typed. */
+  base_url?: string
+  key_placeholder?: string
+  key_hint?: string
+  key_url?: string
+  key_link_label?: string
+}
+
+// What people pick from. OpenRouter is an OpenAI-compatible endpoint to the
+// server; here it is just another provider, with its address filled in.
+const KINDS: Kind[] = [
+  { value: 'openai', label: 'OpenAI', api_type: 'openai' },
+  { value: 'gemini', label: 'Google Gemini', api_type: 'gemini' },
+  { value: 'anthropic', label: 'Anthropic (Claude)', api_type: 'anthropic' },
+  {
+    value: 'openrouter',
+    label: 'OpenRouter',
+    api_type: 'openai-compatible',
+    base_url: OPENROUTER_URL,
+    key_placeholder: 'sk-or-...',
+    key_hint: 'One key reaches models from OpenAI, Google, Anthropic, Meta and more, paid from one balance.',
+    key_url: 'https://openrouter.ai/keys',
+    key_link_label: 'Create an OpenRouter key',
+  },
+  {
+    value: 'openai-compatible',
+    label: 'Other OpenAI-compatible (Groq, Ollama…)',
+    api_type: 'openai-compatible',
+    key_hint: 'Use the key from that service. A local server such as Ollama needs no key.',
+    key_url: '',
+  },
+]
+
+const shortName = (kind: Kind) => kind.label.replace(/ \(.*\)$/, '')
+
+function kindOf(provider: AiProvider): Kind {
+  if (provider.api_type === 'openai-compatible' && hostOf(provider.base_url) === 'openrouter.ai') {
+    return KINDS.find(k => k.value === 'openrouter')!
+  }
+  return KINDS.find(k => k.value === provider.api_type) ?? KINDS[0]
 }
 
 export function AiProvidersCard({
@@ -216,25 +264,38 @@ export function AiProvidersCard({
   }, [providers, data, onChange])
 
   const apiTypes: Record<string, ApiTypeSpec> = data?.api_types ?? {}
-  const catalogs: Record<string, string> = data?.compatible_catalogs ?? {}
   const rows = providers ?? data?.providers ?? []
+  const catalogFor = useCatalogFor()
 
   function update(index: number, patch: Partial<AiProvider>) {
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)))
   }
 
-  function catalogFor(provider: AiProvider): string {
-    const spec = apiTypes[provider.api_type]
-    if (spec?.catalog) return spec.catalog
-    return catalogs[hostOf(provider.base_url)] ?? ''
-  }
+  const isSaved = (provider: AiProvider) =>
+    Boolean(provider.id && data?.providers.some(p => p.id === provider.id))
 
   function add() {
-    const firstType = Object.keys(apiTypes)[0] ?? 'openai'
     onChange([
       ...rows,
-      { id: '', name: '', api_type: firstType, api_key: '', base_url: '', model: '' },
+      { id: '', name: '', api_type: 'openai', api_key: '', base_url: '', model: '' },
     ])
+  }
+
+  function changeKind(index: number, provider: AiProvider, next: Kind) {
+    const previous = kindOf(provider)
+    if (previous.value === next.value) return
+    // A name still matching the old kind was never really chosen, so it
+    // follows the new one. The model belongs to the old vendor either way.
+    const renamed = !provider.name.trim() || provider.name === shortName(previous)
+    update(index, {
+      api_type: next.api_type,
+      base_url: next.base_url ?? '',
+      model: '',
+      ...(renamed && {
+        name: shortName(next),
+        id: isSaved(provider) ? provider.id : slugify(shortName(next)),
+      }),
+    })
   }
 
   return (
@@ -245,10 +306,9 @@ export function AiProvidersCard({
           AI Providers
         </CardTitle>
         <CardDescription>
-          The models this instance can reach. A provider is an API dialect, a key, a
-          model name and — for OpenAI-compatible endpoints — a base URL, which between
-          them cover OpenAI, Gemini, Claude, OpenRouter, Groq, a local Ollama and
-          anything else speaking one of those dialects.
+          Your AI accounts: OpenAI, Gemini, Claude, OpenRouter, a local Ollama or any
+          other OpenAI-compatible endpoint. Each has a key and a default model. Which
+          account does which job is chosen under AI Tasks below.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -260,6 +320,11 @@ export function AiProvidersCard({
 
         {rows.map((provider, index) => {
           const spec = apiTypes[provider.api_type]
+          const kind = kindOf(provider)
+          const keyPlaceholder = kind.key_placeholder ?? spec?.key_placeholder ?? 'sk-...'
+          const keyHint = kind.key_hint ?? spec?.key_hint
+          const keyUrl = kind.key_url ?? spec?.key_url
+          const keyLinkLabel = kind.key_link_label ?? spec?.key_link_label
           return (
             <div
               key={index}
@@ -279,26 +344,24 @@ export function AiProvidersCard({
                         // Ids follow the name until the record has been saved
                         // once; renaming a saved provider must not orphan the
                         // sections pointing at it.
-                        id: provider.id && data?.providers.some(p => p.id === provider.id)
-                          ? provider.id
-                          : slugify(e.target.value),
+                        id: isSaved(provider) ? provider.id : slugify(e.target.value),
                       })
                     }
                   />
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <Label>API type</Label>
+                  <Label>Provider</Label>
                   <Select
-                    value={provider.api_type}
-                    onValueChange={v => update(index, { api_type: v })}
+                    value={kind.value}
+                    onValueChange={v => changeKind(index, provider, KINDS.find(k => k.value === v)!)}
                   >
                     <SelectTrigger className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.entries(apiTypes).map(([key, value]) => (
-                        <SelectItem key={key} value={key}>
-                          {value.label}
+                      {KINDS.map(k => (
+                        <SelectItem key={k.value} value={k.value}>
+                          {k.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -311,30 +374,31 @@ export function AiProvidersCard({
                   <Label>API key</Label>
                   <Input
                     type="password"
-                    placeholder={spec?.key_placeholder || 'sk-...'}
+                    placeholder={keyPlaceholder}
                     autoComplete="off"
                     autoCapitalize="none"
                     spellCheck={false}
                     value={provider.api_key}
                     onChange={e => update(index, { api_key: e.target.value })}
                   />
-                  {spec?.key_hint && (
+                  {keyHint && (
                     <p className="text-xs text-muted-foreground">
-                      {spec.key_hint}{' '}
-                      {spec.key_url && (
+                      {keyHint}{' '}
+                      {keyUrl && (
                         <a
-                          href={spec.key_url}
+                          href={keyUrl}
                           target="_blank"
                           rel="noreferrer"
                           className="underline underline-offset-2 hover:text-foreground"
                         >
-                          {spec.key_link_label || spec.key_url}
+                          {keyLinkLabel || keyUrl}
                         </a>
                       )}
                     </p>
                   )}
                 </div>
                 <ModelField
+                  label="Default model"
                   catalog={catalogFor(provider)}
                   value={provider.model}
                   onChange={model => update(index, { model })}
@@ -342,12 +406,12 @@ export function AiProvidersCard({
                 />
               </div>
 
-              {spec?.needs_base_url && (
+              {spec?.needs_base_url && !kind.base_url && (
                 <div className="flex flex-col gap-1.5">
                   <Label>Base URL</Label>
                   <Input
                     type="url"
-                    placeholder={spec.default_base_url || 'https://api.example.com/v1'}
+                    placeholder="https://api.groq.com/openai/v1"
                     autoComplete="off"
                     autoCapitalize="none"
                     spellCheck={false}
@@ -376,21 +440,11 @@ export function AiProvidersCard({
           )
         })}
 
-        <div className="flex flex-wrap gap-2">
+        <div>
           <Button type="button" variant="secondary" onClick={add}>
             <PlusIcon />
             Add provider
           </Button>
-          {!rows.some(p => hostOf(p.base_url) === 'openrouter.ai') && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onChange([...rows, { ...OPENROUTER_PRESET }])}
-            >
-              <PlusIcon />
-              Add OpenRouter
-            </Button>
-          )}
         </div>
       </CardContent>
     </Card>

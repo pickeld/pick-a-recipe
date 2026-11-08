@@ -101,20 +101,66 @@ def openrouter_models() -> list[dict[str, Any]]:
             "input_cost": _usd(pricing.get("prompt"), 1_000_000),
             "output_cost": _usd(pricing.get("completion"), 1_000_000),
             "context": model.get("context_length") if isinstance(model.get("context_length"), int) else None,
+            "unit": "mtok",
         })
 
     suggestions.sort(key=lambda m: (m["released"], m["id"]), reverse=True)
     return suggestions
 
 
-def catalog_models(catalog: str) -> list[dict[str, Any]]:
+def openrouter_transcription_models() -> list[dict[str, Any]]:
+    """OpenRouter's speech-to-text models, cheapest first.
+
+    They are left out of the default model list and have to be asked for.
+    Whisper-style models are billed per second of audio, quoted as a "prompt"
+    price with no completion price; those are shown per minute instead.
+    """
+    document = _cached(f"{_OPENROUTER_URL}?output_modalities=transcription")
+    models = document.get("data") if isinstance(document, dict) else None
+    if not isinstance(models, list):
+        raise ValueError("OpenRouter returned an unexpected document")
+
+    suggestions = []
+    for model in models:
+        if not isinstance(model, dict) or not model.get("id"):
+            continue
+        pricing = model.get("pricing") or {}
+        try:
+            per_second = float(pricing.get("completion")) == 0
+        except (TypeError, ValueError):
+            per_second = False
+        entry: dict[str, Any] = {
+            "id": str(model["id"]),
+            "name": str(model.get("name") or model["id"]),
+            "released": "",
+            "context": None,
+        }
+        if per_second:
+            entry.update(unit="minute", input_cost=_usd(pricing.get("prompt"), 60), output_cost=None)
+        else:
+            entry.update(
+                unit="mtok",
+                input_cost=_usd(pricing.get("prompt"), 1_000_000),
+                output_cost=_usd(pricing.get("completion"), 1_000_000),
+            )
+        suggestions.append(entry)
+
+    suggestions.sort(key=lambda m: (m["unit"] != "minute", m["input_cost"] is None, m["input_cost"] or 0))
+    return suggestions
+
+
+def catalog_models(catalog: str, task: str = "chat") -> list[dict[str, Any]]:
     """Suggestable models for one provider catalog, best candidates first.
 
-    Only models that can both take an image and be held to a JSON schema are
-    offered: recipe extraction reads video frames and needs structured output,
-    so a text-only or unstructured model would be a suggestion that cannot do
-    the job.
+    For chat, only models that can both take an image and be held to a JSON
+    schema are offered: recipe extraction reads video frames and needs
+    structured output, so a text-only or unstructured model would be a
+    suggestion that cannot do the job. For transcription, only OpenRouter
+    publishes a list; elsewhere the model is typed by hand.
     """
+    if task == "transcription":
+        return openrouter_transcription_models() if catalog == "openrouter" else []
+
     if catalog == "openrouter":
         try:
             return openrouter_models()
@@ -144,6 +190,7 @@ def catalog_models(catalog: str) -> list[dict[str, Any]]:
             "input_cost": _usd(cost.get("input")),
             "output_cost": _usd(cost.get("output")),
             "context": context if isinstance(context, int) else None,
+            "unit": "mtok",
         })
 
     suggestions.sort(key=lambda m: (m["released"], m["id"]), reverse=True)

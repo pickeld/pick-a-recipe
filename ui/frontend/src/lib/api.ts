@@ -228,9 +228,9 @@ export const api = {
       compatible_catalogs: Record<string, string>
     }>('/api/ai/providers'),
 
-  modelCatalog: (catalog: string) =>
+  modelCatalog: (catalog: string, task: 'chat' | 'transcription' = 'chat') =>
     request<{ models: import('@/types').CatalogModel[] }>(
-      `/api/ai/model-catalog?catalog=${encodeURIComponent(catalog)}`,
+      `/api/ai/model-catalog?catalog=${encodeURIComponent(catalog)}&task=${task}`,
     ),
 
   saveConfig: (patch: Partial<import('@/types').AppConfig>) =>

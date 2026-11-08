@@ -268,7 +268,7 @@ export interface AiProvider {
   model: string
 }
 
-/** A model suggestion for the settings page. Costs are USD per million tokens. */
+/** A model suggestion for the settings page. Costs are USD per `unit`. */
 export interface CatalogModel {
   id: string
   name: string
@@ -276,6 +276,8 @@ export interface CatalogModel {
   input_cost: number | null
   output_cost: number | null
   context: number | null
+  /** 'mtok': per million tokens. 'minute': per minute of audio, input only. */
+  unit: 'mtok' | 'minute'
 }
 
 /** What an API dialect needs, for rendering its fields. */
@@ -305,6 +307,11 @@ export interface AppConfig {
   transcription_mode: string
   transcription_provider: string
   transcription_model: string
+  /** Per-task model overrides; empty uses the provider's own model. */
+  ai_extraction_model: string
+  /** Empty means "same as recipe extraction". */
+  kitchen_provider: string
+  kitchen_model: string
   /** Superseded by ai_providers; still read when migrating an old install. */
   llm_provider: 'openai' | 'gemini' | 'openrouter'
   openai_api_key: string

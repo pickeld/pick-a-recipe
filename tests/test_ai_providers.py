@@ -119,6 +119,46 @@ class LegacyMigrationTests(unittest.TestCase):
             self.assertEqual(selected_provider(config).id, "kept")
 
 
+class TaskChoiceTests(unittest.TestCase):
+    RAW = serialize_providers([
+        AiProvider(id="gemini", name="Gemini", api_type=GEMINI, api_key="k", model="gemini-x"),
+        AiProvider(id="openrouter", name="OpenRouter", api_type=OPENAI_COMPATIBLE, api_key="k",
+                   base_url="https://openrouter.ai/api/v1", model="openai/gpt-4o-mini"),
+    ])
+
+    def test_extraction_uses_the_provider_model_unless_overridden(self):
+        with _settings(ai_providers=self.RAW, ai_extraction_provider="openrouter"):
+            provider, model, key = ai_providers.task_choice(ai_providers.EXTRACTION, config)
+        self.assertEqual((provider.id, model, key), ("openrouter", "openai/gpt-4o-mini", None))
+        with _settings(ai_providers=self.RAW, ai_extraction_provider="openrouter",
+                       ai_extraction_model="google/gemini-3.8-flash"):
+            provider, model, key = ai_providers.task_choice(ai_providers.EXTRACTION, config)
+        self.assertEqual((model, key), ("google/gemini-3.8-flash", "ai_extraction_model"))
+
+    def test_kitchen_follows_extraction_when_not_set(self):
+        with _settings(ai_providers=self.RAW, ai_extraction_provider="openrouter",
+                       ai_extraction_model="cheap/model"):
+            provider, model, _ = ai_providers.task_choice(ai_providers.KITCHEN, config)
+        self.assertEqual((provider.id, model), ("openrouter", "cheap/model"))
+
+    def test_kitchen_can_use_its_own_provider_and_model(self):
+        with _settings(ai_providers=self.RAW, ai_extraction_provider="gemini",
+                       kitchen_provider="openrouter", kitchen_model="fast/chat"):
+            provider, model, key = ai_providers.task_choice(ai_providers.KITCHEN, config)
+        self.assertEqual((provider.id, model, key), ("openrouter", "fast/chat", "kitchen_model"))
+
+    def test_a_removed_kitchen_provider_falls_back_to_extraction(self):
+        with _settings(ai_providers=self.RAW, ai_extraction_provider="gemini",
+                       kitchen_provider="deleted"):
+            provider, _, _ = ai_providers.task_choice(ai_providers.KITCHEN, config)
+        self.assertEqual(provider.id, "gemini")
+
+    def test_session_for_a_task_picks_its_model(self):
+        with _settings(ai_providers=self.RAW, kitchen_provider="openrouter", kitchen_model="fast/chat"):
+            session = AiSession(task=ai_providers.KITCHEN)
+        self.assertEqual((session.provider.id, session.model), ("openrouter", "fast/chat"))
+
+
 class ValidationTests(unittest.TestCase):
     def test_openai_compatible_needs_a_base_url(self):
         provider = AiProvider(id="x", name="X", api_type=OPENAI_COMPATIBLE,

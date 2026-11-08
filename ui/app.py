@@ -1303,10 +1303,11 @@ def api_model_catalog():
     from model_catalog import catalog_models
 
     catalog = (request.args.get('catalog') or '').strip()
+    task = 'transcription' if request.args.get('task') == 'transcription' else 'chat'
     if not catalog:
         return jsonify({'models': []})
     try:
-        return jsonify({'catalog': catalog, 'models': catalog_models(catalog)})
+        return jsonify({'catalog': catalog, 'models': catalog_models(catalog, task)})
     except Exception as exc:
         # A suggestion list is not worth failing the settings page over.
         app.logger.info('[AI] model catalog unavailable: %s', exc)
@@ -1344,6 +1345,9 @@ def settings():
             config['ai_providers'] = _providers_from_form(request.form, existing_keys)
         for key in (
             'ai_extraction_provider',
+            'ai_extraction_model',
+            'kitchen_provider',
+            'kitchen_model',
             'transcription_mode',
             'transcription_provider',
             'transcription_model',

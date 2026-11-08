@@ -274,6 +274,34 @@ def selected_provider(cfg=None) -> AiProvider:
     return providers[0]
 
 
+# The jobs the app hands to a model. Speech to text is configured separately
+# (see transcription_provider) because it can also run locally or not at all.
+EXTRACTION = "extraction"
+KITCHEN = "kitchen"
+
+
+def task_choice(task: str = EXTRACTION, cfg=None) -> tuple[AiProvider, str, str | None]:
+    """The provider and model for a task, plus the config key its model lives in.
+
+    The key is None when the model is the provider's own, so a fallback is
+    remembered on the provider record rather than on a task that never set one.
+    """
+    if cfg is None:
+        from config import config as cfg  # noqa: PLW0127
+    if task == KITCHEN:
+        wanted = (cfg.KITCHEN_PROVIDER or "").strip()
+        if wanted:
+            for provider in load_providers(cfg):
+                if provider.id == wanted:
+                    model = (cfg.KITCHEN_MODEL or "").strip()
+                    return provider, model or provider.model, "kitchen_model" if model else None
+            logger.warning(
+                "[AI] Kitchen provider %r is not configured; using the extraction provider.", wanted)
+    provider = selected_provider(cfg)
+    model = (cfg.AI_EXTRACTION_MODEL or "").strip()
+    return provider, model or provider.model, "ai_extraction_model" if model else None
+
+
 def describe(provider: AiProvider) -> str:
     """A one-line, secret-free summary for logs and health output."""
     spec = API_TYPES.get(provider.api_type) or {}
@@ -325,8 +353,14 @@ class AiSession:
     the model that worked rather than re-trying the dead one on every call.
     """
 
-    def __init__(self, provider: AiProvider | None = None, model: str | None = None):
-        self.provider = provider if provider is not None else selected_provider()
+    def __init__(self, provider: AiProvider | None = None, model: str | None = None,
+                 *, task: str = EXTRACTION):
+        self._model_key: str | None = None
+        if provider is None:
+            provider, task_model, self._model_key = task_choice(task)
+            if not model:
+                model = task_model
+        self.provider = provider
         validate(self.provider, require_key=False)
         self.model = model or self.provider.model
         self._client: Any = None
@@ -397,9 +431,13 @@ class AiSession:
         return result
 
     def _remember_model(self, model: str) -> None:
-        """Write a model that worked back into this provider's record."""
+        """Write a model that worked back to where the failing one was set."""
         try:
             from config import config, set_config_value
+            if self._model_key:
+                set_config_value(self._model_key, model)
+                config.reload()
+                return
             providers = load_providers(config)
             updated = [
                 AiProvider(**{**asdict(p), "model": model}) if p.id == self.provider.id else p

@@ -98,8 +98,31 @@ class ModelCatalogTests(unittest.TestCase):
             models = model_catalog.catalog_models("google")
         self.assertEqual(models, [{
             "id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash", "released": "2026-06-01",
-            "input_cost": 0.3, "output_cost": 2.5, "context": 1048576,
+            "input_cost": 0.3, "output_cost": 2.5, "context": 1048576, "unit": "mtok",
         }])
+
+    def test_transcription_models_are_priced_per_minute_or_per_token(self):
+        listing = {"data": [
+            {"id": "openai/gpt-4o-transcribe", "name": "GPT-4o Transcribe",
+             "pricing": {"prompt": "0.0000025", "completion": "0.00001"}},
+            {"id": "openai/whisper-1", "name": "Whisper 1",
+             "pricing": {"prompt": "0.0001", "completion": "0"}},
+        ]}
+
+        def fetch(url):
+            self.assertIn("output_modalities=transcription", url)
+            return listing
+
+        with patch.object(model_catalog, "_fetch", side_effect=fetch):
+            models = model_catalog.catalog_models("openrouter", "transcription")
+        whisper, gpt = models
+        self.assertEqual((whisper["id"], whisper["unit"]), ("openai/whisper-1", "minute"))
+        self.assertAlmostEqual(whisper["input_cost"], 0.006)
+        self.assertEqual((gpt["unit"], gpt["input_cost"], gpt["output_cost"]), ("mtok", 2.5, 10.0))
+
+    def test_only_openrouter_lists_transcription_models(self):
+        with patch.object(model_catalog, "_fetch", side_effect=AssertionError("no fetch")):
+            self.assertEqual(model_catalog.catalog_models("openai", "transcription"), [])
 
     def test_documents_are_cached(self):
         with patch.object(model_catalog, "_fetch", side_effect=_fake_fetch) as fetch:
