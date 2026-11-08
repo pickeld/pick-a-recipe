@@ -1,8 +1,8 @@
 # Pre-merge checks.
 #
 # deploy.yml only fires once main has already moved, so before this workflow
-# nothing verified a pull request: a red test, a type error in the SPA, or a
-# broken Android build config could all reach main unnoticed.
+# nothing verified a pull request: a red test or a type error in the SPA could
+# reach main unnoticed.
 #
 # Every job runs on every pull request regardless of which paths changed. A
 # paths filter would report "skipped" rather than "success", which blocks a
@@ -152,13 +152,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          # Matches jvmTarget in android/app/build.gradle.kts.
-          java-version: '17'
-
       - name: Set up Flutter
         # Third-party action, pinned to a commit rather than a movable tag.
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
@@ -176,8 +169,6 @@ jobs:
       - name: Test
         run: flutter test
 
-      - name: Build debug APK
-        # Neither analyze nor test touches Gradle, which is exactly how a
-        # broken Android build config survived from the scaffold commit until
-        # someone tried to build an APK by hand.
-        run: flutter build apk --debug --dart-define=FLAVOR=dev
+      # No APK build here: it pulled Gradle and the Kotlin compiler from GitHub
+      # releases on every run and failed CI whenever that timed out. The APK is
+      # built by release-apk.yml, so a broken Gradle config surfaces there.
