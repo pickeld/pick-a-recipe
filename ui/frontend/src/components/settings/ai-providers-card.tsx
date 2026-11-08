@@ -1,9 +1,10 @@
-import { useEffect, useId } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { PlusIcon, ServerIcon, Trash2Icon } from 'lucide-react'
+import { PlusIcon, SearchIcon, ServerIcon, Trash2Icon } from 'lucide-react'
 
 import { api } from '@/lib/api'
-import type { AiProvider, ApiTypeSpec } from '@/types'
+import { cn } from '@/lib/utils'
+import type { AiProvider, ApiTypeSpec, CatalogModel } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
@@ -35,9 +36,29 @@ function hostOf(url: string): string {
   }
 }
 
+function usd(value: number | null): string {
+  if (value === null) return '?'
+  if (value === 0) return 'free'
+  return `$${value < 0.1 ? value.toFixed(3) : value < 10 ? value.toFixed(2) : value.toFixed(0)}`
+}
+
+function contextSize(tokens: number | null): string {
+  if (!tokens) return ''
+  return tokens >= 1_000_000 ? `${+(tokens / 1_000_000).toFixed(1)}M` : `${Math.round(tokens / 1000)}K`
+}
+
+function priceLine(model: CatalogModel): string {
+  if (model.input_cost === 0 && model.output_cost === 0) return 'Free'
+  return `${usd(model.input_cost)} in · ${usd(model.output_cost)} out`
+}
+
+// Unknown prices sort last, so "cheapest" never opens on a model nobody can price.
+const blendedCost = (m: CatalogModel) =>
+  m.input_cost === null || m.output_cost === null ? Infinity : m.input_cost + m.output_cost
+
 /**
- * Model names are always free text. The datalist only saves people from having
- * to look an id up, so a gateway models.dev has never heard of still works.
+ * Model names are always free text. The list only saves people from having to
+ * look an id and its price up, so a gateway no catalog has heard of still works.
  */
 function ModelField({
   catalog,
@@ -51,20 +72,45 @@ function ModelField({
   placeholder: string
 }) {
   const listId = useId()
-  const { data } = useQuery({
+  const [browsing, setBrowsing] = useState(false)
+  const [search, setSearch] = useState('')
+  const [sort, setSort] = useState<'newest' | 'cheapest'>('newest')
+  const { data, isLoading } = useQuery({
     queryKey: ['modelCatalog', catalog],
     queryFn: () => api.modelCatalog(catalog),
     enabled: Boolean(catalog),
     staleTime: 6 * 60 * 60 * 1000,
     retry: false,
   })
+  const models = useMemo(() => data?.models ?? [], [data])
+  const selected = models.find(m => m.id === value)
+
+  const shown = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    const hits = needle
+      ? models.filter(m => m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle))
+      : models
+    return sort === 'cheapest' ? [...hits].sort((a, b) => blendedCost(a) - blendedCost(b)) : hits
+  }, [models, search, sort])
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Label>Model</Label>
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={listId}>Model</Label>
+        {models.length > 0 && (
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            aria-expanded={browsing}
+            onClick={() => setBrowsing(v => !v)}
+          >
+            {browsing ? 'Hide models' : `Browse ${models.length} models`}
+          </button>
+        )}
+      </div>
       <Input
+        id={listId}
         type="text"
-        list={listId}
         placeholder={placeholder}
         autoComplete="off"
         autoCapitalize="none"
@@ -72,16 +118,82 @@ function ModelField({
         value={value}
         onChange={e => onChange(e.target.value)}
       />
-      <datalist id={listId}>
-        {(data?.models ?? []).map(model => (
-          <option key={model.id} value={model.id} label={model.name} />
-        ))}
-      </datalist>
+      {browsing && (
+        <div className="flex flex-col gap-2 rounded-md border border-border p-2">
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <SearchIcon className="pointer-events-none absolute start-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="Search models"
+                className="h-8 ps-7 text-sm"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+            </div>
+            <Select value={sort} onValueChange={v => setSort(v as 'newest' | 'cheapest')}>
+              <SelectTrigger size="sm" className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="newest">Newest</SelectItem>
+                <SelectItem value="cheapest">Cheapest</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <ul className="max-h-72 overflow-y-auto" role="listbox" aria-label="Models">
+            {shown.length === 0 && (
+              <li className="px-2 py-3 text-center text-xs text-muted-foreground">No model matches.</li>
+            )}
+            {shown.map(model => (
+              <li key={model.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={model.id === value}
+                  onClick={() => {
+                    onChange(model.id)
+                    setBrowsing(false)
+                  }}
+                  className={cn(
+                    'flex w-full items-start justify-between gap-3 rounded px-2 py-1.5 text-start hover:bg-muted',
+                    model.id === value && 'bg-muted',
+                  )}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm">{model.name}</span>
+                    <span className="block truncate font-mono text-[11px] text-muted-foreground">{model.id}</span>
+                  </span>
+                  <span className="shrink-0 text-end text-xs tabular-nums">
+                    <span className="block">{priceLine(model)}</span>
+                    {model.context && (
+                      <span className="block text-muted-foreground">{contextSize(model.context)} context</span>
+                    )}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <p className="text-xs text-muted-foreground">
-        Any model name works. Suggestions come from models.dev.
+        {selected
+          ? `${priceLine(selected)} per million tokens${selected.context ? ` · ${contextSize(selected.context)} context` : ''}.`
+          : isLoading
+            ? 'Loading models…'
+            : `Any model name works.${models.length ? ' Prices are USD per million tokens.' : ''}`}
       </p>
     </div>
   )
+}
+
+const OPENROUTER_PRESET: AiProvider = {
+  id: 'openrouter',
+  name: 'OpenRouter',
+  api_type: 'openai-compatible',
+  api_key: '',
+  base_url: 'https://openrouter.ai/api/v1',
+  model: '',
 }
 
 export function AiProvidersCard({
@@ -264,11 +376,21 @@ export function AiProvidersCard({
           )
         })}
 
-        <div>
+        <div className="flex flex-wrap gap-2">
           <Button type="button" variant="secondary" onClick={add}>
             <PlusIcon />
             Add provider
           </Button>
+          {!rows.some(p => hostOf(p.base_url) === 'openrouter.ai') && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onChange([...rows, { ...OPENROUTER_PRESET }])}
+            >
+              <PlusIcon />
+              Add OpenRouter
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>

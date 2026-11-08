@@ -229,7 +229,7 @@ export const api = {
     }>('/api/ai/providers'),
 
   modelCatalog: (catalog: string) =>
-    request<{ models: { id: string; name: string; released: string }[] }>(
+    request<{ models: import('@/types').CatalogModel[] }>(
       `/api/ai/model-catalog?catalog=${encodeURIComponent(catalog)}`,
     ),
 

@@ -8,6 +8,7 @@ fallback control flow - without needing the provider SDKs or network.
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,7 +17,9 @@ from llm_resilience import (  # noqa: E402
     ModelUnavailableError,
     call_with_model_fallback,
     candidate_models,
+    is_billing_error,
     is_model_unavailable_error,
+    is_transient_error,
 )
 
 
@@ -147,6 +150,44 @@ class CallWithModelFallbackTests(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("openai", msg)
         self.assertIn("Settings", msg)
+
+
+class BillingErrorTests(unittest.TestCase):
+    GEMINI_DEPLETED = (
+        "402 RESOURCE_EXHAUSTED. {'error': {'code': 402, 'message': 'Your prepayment "
+        "credits are depleted. Please go to AI Studio at https://ai.studio/projects to "
+        "manage your project and billing.', 'status': 'RESOURCE_EXHAUSTED'}}"
+    )
+
+    def test_depleted_credits_are_billing_not_transient(self):
+        for exc in (
+            Exception(self.GEMINI_DEPLETED),
+            _FakeStatusError("Payment Required", 402),
+            _FakeStatusError("You exceeded your current quota. insufficient_quota", 429),
+            Exception("Your credit balance is too low to access the Anthropic API"),
+        ):
+            self.assertTrue(is_billing_error(exc), exc)
+            self.assertFalse(is_transient_error(exc), exc)
+
+    def test_per_minute_quota_is_still_transient(self):
+        exc = Exception(
+            "429 RESOURCE_EXHAUSTED. You exceeded your current quota, please check "
+            "your plan and billing details.")
+        self.assertFalse(is_billing_error(exc))
+        self.assertTrue(is_transient_error(exc))
+
+    def test_depleted_credits_fail_fast_without_retries_or_fallbacks(self):
+        attempted = []
+
+        def call(model):
+            attempted.append(model)
+            raise Exception(self.GEMINI_DEPLETED)
+
+        with patch("llm_resilience.time.sleep") as sleep, self.assertRaises(Exception) as ctx:
+            call_with_model_fallback("gemini", "gemini-2.5-flash", call, persist=False)
+        self.assertIn("credits are depleted", str(ctx.exception))
+        self.assertEqual(attempted, ["gemini-2.5-flash"])
+        sleep.assert_not_called()
 
 
 if __name__ == "__main__":

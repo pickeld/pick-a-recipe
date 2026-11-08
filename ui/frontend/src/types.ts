@@ -268,6 +268,16 @@ export interface AiProvider {
   model: string
 }
 
+/** A model suggestion for the settings page. Costs are USD per million tokens. */
+export interface CatalogModel {
+  id: string
+  name: string
+  released: string
+  input_cost: number | null
+  output_cost: number | null
+  context: number | null
+}
+
 /** What an API dialect needs, for rendering its fields. */
 export interface ApiTypeSpec {
   label: string

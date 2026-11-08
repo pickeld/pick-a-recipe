@@ -68,6 +68,17 @@ _TRANSIENT_MARKERS = (
     "try again",
 )
 
+# Out of credits for the whole account. These arrive dressed as transient
+# (Gemini: 402 RESOURCE_EXHAUSTED, OpenAI: 429 insufficient_quota), but no
+# retry or other model on the same key can succeed. Plain "billing" is not one:
+# Gemini's per-minute 429s also tell you to "check your plan and billing".
+_BILLING_MARKERS = (
+    "credits are depleted",
+    "insufficient_quota",
+    "credit balance is too low",
+    "payment required",
+)
+
 # Retry config for transient errors: up to 3 attempts, 5s / 15s back-off.
 _TRANSIENT_MAX_RETRIES = 3
 _TRANSIENT_RETRY_DELAYS = [5, 15]  # seconds between attempt 1→2, 2→3
@@ -92,8 +103,19 @@ def is_model_unavailable_error(exc: BaseException) -> bool:
     return any(marker in message for marker in _MODEL_GONE_MARKERS)
 
 
+def is_billing_error(exc: BaseException) -> bool:
+    """Return True if the provider account has run out of credits."""
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in (402, "402"):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _BILLING_MARKERS)
+
+
 def is_transient_error(exc: BaseException) -> bool:
     """Return True if the exception looks like a temporary server-side spike."""
+    if is_billing_error(exc):
+        return False
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     if status in (429, 502, 503, 504, "429", "502", "503", "504"):
         return True
@@ -151,7 +173,8 @@ def call_with_model_fallback(provider, configured_model, call, *, persist=True,
     - Transient (503/429/overloaded): retry with back-off, then fall through to
       the next model if all retries are exhausted.
     - Model-gone (404/deprecated): skip to the next model immediately.
-    - Any other error: re-raise immediately (bad API key, content policy, etc.).
+    - Any other error: re-raise immediately (bad API key, out of credits,
+      content policy, etc.).
 
     Args:
         provider: the API dialect, which selects the fallback chain.
@@ -187,7 +210,7 @@ def call_with_model_fallback(provider, configured_model, call, *, persist=True,
             )
             continue
         except Exception as exc:
-            if not is_model_unavailable_error(exc):
+            if is_billing_error(exc) or not is_model_unavailable_error(exc):
                 raise
             last_error = exc
             logger.warning(

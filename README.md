@@ -431,7 +431,7 @@ pick-a-recipe/
 ├── helpers.py           # Utility functions and prompts
 ├── ai_providers.py      # Configurable AI providers + one client per dialect
 ├── frame_selector.py    # Picks the dish photo via the configured provider
-├── model_catalog.py     # models.dev suggestions for the settings page
+├── model_catalog.py     # Model suggestions with prices (models.dev, OpenRouter live) for the settings page
 ├── ui/                  # Flask web UI
 │   ├── app.py           # Flask application
 │   ├── database.py      # SQLite database management
