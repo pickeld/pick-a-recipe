@@ -100,12 +100,8 @@ DEFAULT_CONFIG = {
     # llm_provider / *_api_key / *_model settings below.
     "ai_providers": "",
     "ai_extraction_provider": "",
-    # Per-task model overrides. Empty uses the model set on the provider.
+    # Model for extraction, Sous Chef and imports. Empty uses the provider's own.
     "ai_extraction_model": "",
-    # Sous Chef, photo and page imports, tag and substitution suggestions.
-    # An empty provider means "same as recipe extraction".
-    "kitchen_provider": "",
-    "kitchen_model": "",
     # Speech-to-text: 'local' runs faster-whisper on this machine, 'provider'
     # posts the audio to one of the configured AI providers, 'off' skips audio
     # and builds the recipe from on-screen text. 'off' never loads Whisper,
@@ -264,14 +260,6 @@ class Config:
     @property
     def AI_EXTRACTION_MODEL(self) -> str:
         return self._get('ai_extraction_model', DEFAULT_CONFIG['ai_extraction_model'])
-
-    @property
-    def KITCHEN_PROVIDER(self) -> str:
-        return self._get('kitchen_provider', DEFAULT_CONFIG['kitchen_provider'])
-
-    @property
-    def KITCHEN_MODEL(self) -> str:
-        return self._get('kitchen_model', DEFAULT_CONFIG['kitchen_model'])
 
     @property
     def TRANSCRIPTION_MODE(self) -> str:

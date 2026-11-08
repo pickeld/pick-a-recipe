@@ -442,10 +442,10 @@ def _extraction_to_schema(text: str) -> dict:
 
 
 def _session():
-    from ai_providers import KITCHEN, AiSession
+    from ai_providers import AiSession
 
     try:
-        return AiSession(task=KITCHEN)
+        return AiSession()
     except Exception as exc:
         raise ImportFailed(f"No AI provider is configured: {exc}") from exc
 

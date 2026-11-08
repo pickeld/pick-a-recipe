@@ -1346,8 +1346,6 @@ def settings():
         for key in (
             'ai_extraction_provider',
             'ai_extraction_model',
-            'kitchen_provider',
-            'kitchen_model',
             'transcription_mode',
             'transcription_provider',
             'transcription_model',

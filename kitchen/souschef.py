@@ -128,11 +128,11 @@ class StepLinks(BaseModel):
 
 
 def _ask(system: str, payload: dict, model: type[BaseModel]) -> BaseModel:
-    from ai_providers import KITCHEN, AiSession, ProviderConfigError
+    from ai_providers import AiSession, ProviderConfigError
     from recipe_schema import parse_model, to_openai_json_schema
 
     try:
-        session = AiSession(task=KITCHEN)
+        session = AiSession()
     except ProviderConfigError as exc:
         raise SousChefUnavailable(str(exc)) from exc
     except Exception as exc:

@@ -274,29 +274,16 @@ def selected_provider(cfg=None) -> AiProvider:
     return providers[0]
 
 
-# The jobs the app hands to a model. Speech to text is configured separately
-# (see transcription_provider) because it can also run locally or not at all.
-EXTRACTION = "extraction"
-KITCHEN = "kitchen"
+def model_choice(cfg=None) -> tuple[AiProvider, str, str | None]:
+    """The provider and model for recipe work, plus the config key the model lives in.
 
-
-def task_choice(task: str = EXTRACTION, cfg=None) -> tuple[AiProvider, str, str | None]:
-    """The provider and model for a task, plus the config key its model lives in.
-
+    One choice covers extraction, Sous Chef and imports; speech to text is
+    configured separately because it can also run locally or not at all.
     The key is None when the model is the provider's own, so a fallback is
-    remembered on the provider record rather than on a task that never set one.
+    remembered on the provider record rather than on an override never set.
     """
     if cfg is None:
         from config import config as cfg  # noqa: PLW0127
-    if task == KITCHEN:
-        wanted = (cfg.KITCHEN_PROVIDER or "").strip()
-        if wanted:
-            for provider in load_providers(cfg):
-                if provider.id == wanted:
-                    model = (cfg.KITCHEN_MODEL or "").strip()
-                    return provider, model or provider.model, "kitchen_model" if model else None
-            logger.warning(
-                "[AI] Kitchen provider %r is not configured; using the extraction provider.", wanted)
     provider = selected_provider(cfg)
     model = (cfg.AI_EXTRACTION_MODEL or "").strip()
     return provider, model or provider.model, "ai_extraction_model" if model else None
@@ -353,13 +340,12 @@ class AiSession:
     the model that worked rather than re-trying the dead one on every call.
     """
 
-    def __init__(self, provider: AiProvider | None = None, model: str | None = None,
-                 *, task: str = EXTRACTION):
+    def __init__(self, provider: AiProvider | None = None, model: str | None = None):
         self._model_key: str | None = None
         if provider is None:
-            provider, task_model, self._model_key = task_choice(task)
+            provider, chosen_model, self._model_key = model_choice()
             if not model:
-                model = task_model
+                model = chosen_model
         self.provider = provider
         validate(self.provider, require_key=False)
         self.model = model or self.provider.model

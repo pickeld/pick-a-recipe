@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { AudioLinesIcon, BrainIcon, ChefHatIcon, WorkflowIcon } from 'lucide-react'
+import { AudioLinesIcon, ChefHatIcon, WorkflowIcon } from 'lucide-react'
 
 import type { AiProvider, AppConfig } from '@/types'
 import { ModelField } from '@/components/settings/ai-providers-card'
@@ -11,7 +11,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 // The dialects that expose an OpenAI-compatible /audio/transcriptions endpoint.
 const AUDIO_API_TYPES = ['openai', 'openai-compatible']
-const SAME_AS_EXTRACTION = '__extraction__'
 
 type Get = <K extends keyof AppConfig>(key: K) => AppConfig[K]
 type Set = <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => void
@@ -71,8 +70,6 @@ export function AiTasksCard({ providers, get, set }: {
   // A provider that was renamed or removed leaves the saved id pointing
   // nowhere; the server falls back to the first, so the page shows the same.
   const extraction = byId(get('ai_extraction_provider') || get('llm_provider')) ?? named[0]
-  const kitchen = byId(get('kitchen_provider'))
-  const kitchenEffective = kitchen ?? extraction
 
   const audioProviders = named.filter(p => AUDIO_API_TYPES.includes(p.api_type))
   const mode = get('transcription_mode') || 'local'
@@ -100,9 +97,9 @@ export function AiTasksCard({ providers, get, set }: {
 
         {extraction && (
           <Task
-            icon={<BrainIcon className="size-4" />}
-            title="Recipe extraction"
-            description="Turns a video or page into a structured recipe. It reads on-screen text and picks the dish photo, so the model has to see images."
+            icon={<ChefHatIcon className="size-4" />}
+            title="Recipes & Sous Chef"
+            description="Turns videos and pages into recipes, reads recipes from photos and links, and runs Sous Chef and its suggestions. Extraction reads on-screen text and picks the dish photo, so the model has to see images."
           >
             <Field label="Provider">
               <Choice
@@ -121,43 +118,6 @@ export function AiTasksCard({ providers, get, set }: {
               onChange={v => set('ai_extraction_model', v)}
               placeholder={`Default: ${extraction.model || 'none set'}`}
             />
-          </Task>
-        )}
-
-        {extraction && kitchenEffective && (
-          <Task
-            icon={<ChefHatIcon className="size-4" />}
-            title="Kitchen assistant"
-            description="Sous Chef chat, reading recipes from photos and links, and tag and substitution suggestions. A fast, cheap model is usually enough."
-          >
-            <Field label="Provider">
-              <Choice
-                value={kitchen ? kitchen.id : SAME_AS_EXTRACTION}
-                onChange={v => {
-                  set('kitchen_provider', v === SAME_AS_EXTRACTION ? '' : v)
-                  set('kitchen_model', '')
-                }}
-                options={[
-                  { value: SAME_AS_EXTRACTION, label: `Same as recipe extraction (${extraction.name})` },
-                  ...providerOptions,
-                ]}
-              />
-            </Field>
-            {kitchen ? (
-              <ModelField
-                catalog={catalogFor(kitchen)}
-                value={get('kitchen_model')}
-                defaultModel={kitchen.model}
-                onChange={v => set('kitchen_model', v)}
-                placeholder={`Default: ${kitchen.model || 'none set'}`}
-              />
-            ) : (
-              <Field label="Model">
-                <p className="text-sm text-muted-foreground">
-                  {get('ai_extraction_model') || extraction.model || 'Same model as recipe extraction'}
-                </p>
-              </Field>
-            )}
           </Task>
         )}
 

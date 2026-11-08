@@ -307,11 +307,8 @@ export interface AppConfig {
   transcription_mode: string
   transcription_provider: string
   transcription_model: string
-  /** Per-task model overrides; empty uses the provider's own model. */
+  /** Model for extraction, Sous Chef and imports; empty uses the provider's own. */
   ai_extraction_model: string
-  /** Empty means "same as recipe extraction". */
-  kitchen_provider: string
-  kitchen_model: string
   /** Superseded by ai_providers; still read when migrating an old install. */
   llm_provider: 'openai' | 'gemini' | 'openrouter'
   openai_api_key: string
