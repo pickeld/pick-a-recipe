@@ -182,8 +182,11 @@ class Transcriber:
         extracts audio or loads Whisper.
 
         Args:
-            language: Language code for transcription (e.g., 'he', 'en').
-                     Defaults to config.TARGET_LANGUAGE if not specified.
+            language: Language code of the speech (e.g., 'he', 'en'). Leave
+                     it empty to let Whisper or the provider detect it. This
+                     is not config.TARGET_LANGUAGE: that is the language the
+                     recipe is written in afterwards, and forcing it garbles
+                     a video spoken in any other language.
         """
         if config.TRANSCRIPTION_MODE == "off":
             logger.info(
@@ -198,7 +201,9 @@ class Transcriber:
             )
             return ""
 
-        lang = language or config.TARGET_LANGUAGE
+        # Only an explicit spoken-language hint is forwarded. The recipe
+        # language is applied later, when the recipe is written.
+        lang = (language or "").strip() or None
 
         remote = self._transcribe_with_provider(audio_path, lang)
         if remote is not None:
@@ -206,7 +211,7 @@ class Transcriber:
 
         return self._transcribe_locally(audio_path, lang)
 
-    def _transcribe_with_provider(self, audio_path: str, lang: str) -> str | None:
+    def _transcribe_with_provider(self, audio_path: str, lang: str | None) -> str | None:
         """Transcription from the configured provider, or None to use Whisper."""
         from ai_providers import transcribe_audio, transcription_provider
 
@@ -229,10 +234,13 @@ class Transcriber:
             )
             return None
 
-    def _transcribe_locally(self, audio_path: str, lang: str) -> str:
+    def _transcribe_locally(self, audio_path: str, lang: str | None) -> str:
         """faster-whisper on this machine, which needs no API and no network."""
         self._load_model()
-        segments, _info = self.model.transcribe(audio_path, language=lang or None)
+        segments, info = self.model.transcribe(audio_path, language=lang or None)
+        detected = getattr(info, "language", None)
+        if detected:
+            logger.info("[Transcribe] Spoken language: %s", detected)
         return " ".join(seg.text.strip() for seg in segments).strip()
 
     def extract_visual_text(self) -> str:

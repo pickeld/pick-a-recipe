@@ -114,7 +114,7 @@ def run_extraction_pipeline(
             return PipelineResult(error="cancelled")
 
         transcriber = Transcriber(video_path)
-        lang = config.TARGET_LANGUAGE or "source"
+        recipe_lang = config.TARGET_LANGUAGE or "source"
         # Off means ignore audio entirely, including a transcription left over
         # from an earlier run. Writing an empty cache here would also stick:
         # turning speech to text back on would keep reusing that empty file.
@@ -123,7 +123,11 @@ def run_extraction_pipeline(
             transcription = ""
         else:
             reporter.update("transcribe", "Transcribing audio...", 35)
-            audio_cache = os.path.join(dish_dir, f"transcription_{lang}.txt")
+            # The transcript stays in the spoken language. Do not key it on
+            # the recipe language, and do not read transcription_<lang>.txt:
+            # those files were written while Whisper was forced into the
+            # recipe language and can contain wrong amounts.
+            audio_cache = os.path.join(dish_dir, "transcription.txt")
 
             if os.path.exists(audio_cache):
                 reporter.update("transcribe", "Using cached transcription", 40)
@@ -141,7 +145,7 @@ def run_extraction_pipeline(
 
         reporter.update("visual", "Extracting on-screen text...", 55)
         visual_text = ""
-        visual_cache = os.path.join(dish_dir, f"visual_{lang}.txt")
+        visual_cache = os.path.join(dish_dir, f"visual_{recipe_lang}.txt")
         if os.path.exists(visual_cache):
             reporter.update("visual", "Using cached visual text", 60)
             with open(visual_cache, "r", encoding="utf-8") as f:
