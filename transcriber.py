@@ -182,8 +182,11 @@ class Transcriber:
         extracts audio or loads Whisper.
 
         Args:
-            language: Language code for transcription (e.g., 'he', 'en').
-                     Defaults to config.TARGET_LANGUAGE if not specified.
+            language: Language code of the speech (e.g., 'he', 'en'). Leave
+                     it empty to let Whisper or the provider detect it. Not
+                     config.TARGET_LANGUAGE: that is the language the recipe is
+                     written in afterwards, not the language spoken in the
+                     video, so forcing it garbles any video in another language.
         """
         if config.TRANSCRIPTION_MODE == "off":
             logger.info(
@@ -198,7 +201,7 @@ class Transcriber:
             )
             return ""
 
-        lang = language or config.TARGET_LANGUAGE
+        lang = language or None
 
         remote = self._transcribe_with_provider(audio_path, lang)
         if remote is not None:
